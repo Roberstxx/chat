@@ -20,12 +20,17 @@ export default function CallOverlay() {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [incomingOffer, setIncomingOffer] = useState<RtcSignal | null>(null);
+  const [localSpeaking, setLocalSpeaking] = useState(false);
+  const [remoteSpeaking, setRemoteSpeaking] = useState(false);
   const incomingOfferRef = useRef<RtcSignal | null>(null);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
+  const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
   const endedRef = useRef(false);
   const acceptIncomingRef = useRef<((signal: RtcSignal) => Promise<void>) | null>(null);
   const rejectIncomingRef = useRef<(() => void) | null>(null);
@@ -38,12 +43,96 @@ export default function CallOverlay() {
 
   useEffect(() => {
     localStreamRef.current = localStream;
-    if (localVideoRef.current) localVideoRef.current.srcObject = localStream;
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = localStream;
+      void localVideoRef.current.play().catch(() => undefined);
+    }
   }, [localStream]);
 
   useEffect(() => {
-    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStream;
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = remoteStream;
+      void remoteVideoRef.current.play().catch(() => undefined);
+    }
+
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.srcObject = remoteStream;
+      void remoteAudioRef.current.play().catch(() => undefined);
+    }
   }, [remoteStream]);
+
+  useEffect(() => {
+    const watchVolume = (
+      stream: MediaStream | null,
+      setSpeaking: (active: boolean) => void,
+      trackEnabled?: () => boolean,
+    ) => {
+      if (!stream) {
+        setSpeaking(false);
+        return () => undefined;
+      }
+
+      const audioTrack = stream.getAudioTracks()[0];
+      if (!audioTrack) {
+        setSpeaking(false);
+        return () => undefined;
+      }
+
+      const ctx = new AudioContext();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+
+      const source = ctx.createMediaStreamSource(new MediaStream([audioTrack]));
+      source.connect(analyser);
+
+      const data = new Uint8Array(analyser.fftSize);
+      let rafId = 0;
+      let activeUntil = 0;
+
+      const measure = () => {
+        analyser.getByteTimeDomainData(data);
+
+        const allowDetection = trackEnabled ? trackEnabled() : true;
+        if (!allowDetection) {
+          setSpeaking(false);
+          rafId = requestAnimationFrame(measure);
+          return;
+        }
+
+        let sumSquares = 0;
+        for (const value of data) {
+          const normalized = value / 128 - 1;
+          sumSquares += normalized * normalized;
+        }
+        const rms = Math.sqrt(sumSquares / data.length);
+        const now = performance.now();
+        if (rms > 0.02) activeUntil = now + 220;
+        setSpeaking(now < activeUntil);
+        rafId = requestAnimationFrame(measure);
+      };
+
+      measure();
+
+      return () => {
+        cancelAnimationFrame(rafId);
+        setSpeaking(false);
+        source.disconnect();
+        analyser.disconnect();
+        void ctx.close();
+      };
+    };
+
+    const stopLocal = watchVolume(localStream, setLocalSpeaking, () => {
+      const track = localStream?.getAudioTracks()[0];
+      return Boolean(track?.enabled);
+    });
+    const stopRemote = watchVolume(remoteStream, setRemoteSpeaking);
+
+    return () => {
+      stopLocal();
+      stopRemote();
+    };
+  }, [localStream, remoteStream]);
 
   useEffect(() => {
     incomingOfferRef.current = incomingOffer;
@@ -56,6 +145,8 @@ export default function CallOverlay() {
 
     const stopMedia = () => {
       setRemoteStream(null);
+      remoteStreamRef.current = null;
+      pendingIceRef.current = [];
       setLocalStream((prev) => {
         prev?.getTracks().forEach((t) => t.stop());
         return null;
@@ -95,7 +186,18 @@ export default function CallOverlay() {
         }
       };
       pc.ontrack = (event) => {
-        setRemoteStream(event.streams[0]);
+        const [incoming] = event.streams;
+
+        if (incoming) {
+          remoteStreamRef.current = incoming;
+          setRemoteStream(new MediaStream(incoming.getTracks()));
+        } else {
+          if (!remoteStreamRef.current) remoteStreamRef.current = new MediaStream();
+          const exists = remoteStreamRef.current.getTracks().some((track) => track.id === event.track.id);
+          if (!exists) remoteStreamRef.current.addTrack(event.track);
+          setRemoteStream(new MediaStream(remoteStreamRef.current.getTracks()));
+        }
+
         setStatus('En llamada');
       };
 
@@ -119,6 +221,15 @@ export default function CallOverlay() {
           audio: true,
           video: videoEnabled,
         });
+
+        if (videoEnabled && stream.getVideoTracks().length === 0) {
+          const fallbackVideo = await navigator.mediaDevices.getUserMedia({ audio: false, video: true });
+          const [videoTrack] = fallbackVideo.getVideoTracks();
+          if (videoTrack) {
+            stream.addTrack(videoTrack);
+          }
+        }
+
         localStreamRef.current = stream;
         setLocalStream(stream);
         setMicOn(true);
@@ -164,6 +275,22 @@ export default function CallOverlay() {
       }
     };
 
+    const flushPendingIce = async (pc: RTCPeerConnection) => {
+      if (!pc.remoteDescription) return;
+      if (!pendingIceRef.current.length) return;
+
+      const queued = [...pendingIceRef.current];
+      pendingIceRef.current = [];
+
+      for (const candidate of queued) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch {
+          // ignore late/outdated candidates
+        }
+      }
+    };
+
     const createOutgoingOffer = async () => {
       try {
         const pc = ensurePeerConnection();
@@ -198,6 +325,7 @@ export default function CallOverlay() {
         if (pc.signalingState === 'closed') return;
 
         await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
+        await flushPendingIce(pc);
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
 
@@ -249,10 +377,16 @@ export default function CallOverlay() {
 
         if (signal.type === 'answer' && signal.payload && pc.signalingState !== 'closed') {
           await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
+          await flushPendingIce(pc);
           setStatus('En llamada');
         }
 
         if (signal.type === 'ice' && signal.payload && pc.signalingState !== 'closed') {
+          if (!pc.remoteDescription) {
+            pendingIceRef.current.push(signal.payload);
+            return;
+          }
+
           try {
             await pc.addIceCandidate(new RTCIceCandidate(signal.payload));
           } catch {
@@ -301,11 +435,41 @@ export default function CallOverlay() {
     setMicOn((v) => !v);
   };
 
-  const toggleCam = () => {
-    localStreamRef.current?.getVideoTracks().forEach((t) => {
-      t.enabled = !camOn;
-    });
-    setCamOn((v) => !v);
+  const toggleCam = async () => {
+    const stream = localStreamRef.current;
+    if (!stream) return;
+
+    const nextCamOn = !camOn;
+    const videoTracks = stream.getVideoTracks();
+
+    if (nextCamOn && videoTracks.length === 0) {
+      try {
+        const videoStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        const [videoTrack] = videoStream.getVideoTracks();
+        if (!videoTrack) return;
+
+        stream.addTrack(videoTrack);
+        const sender = pcRef.current?.getSenders().find((s) => s.track?.kind === 'video');
+        if (sender) {
+          await sender.replaceTrack(videoTrack);
+        } else {
+          pcRef.current?.addTrack(videoTrack, stream);
+        }
+        setLocalStream(new MediaStream(stream.getTracks()));
+      } catch {
+        toast({
+          title: 'No se pudo encender la cámara',
+          description: 'Revisa permisos de cámara en el navegador.',
+        });
+        return;
+      }
+    } else {
+      videoTracks.forEach((t) => {
+        t.enabled = nextCamOn;
+      });
+    }
+
+    setCamOn(nextCamOn);
   };
 
   const shareScreen = async () => {
@@ -338,16 +502,17 @@ export default function CallOverlay() {
       </div>
 
       <div className="w-full max-w-5xl grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="rounded-2xl bg-black/40 border border-white/10 overflow-hidden aspect-video relative">
+        <div className={`rounded-2xl bg-black/40 border overflow-hidden aspect-video relative transition-all duration-200 ${remoteSpeaking ? 'border-green-400 shadow-[0_0_0_2px_rgba(74,222,128,0.45)]' : 'border-white/10'}`}>
           {callMode === 'video' ? (
             <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-cover" />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-call-foreground text-xl">Audio</div>
           )}
+          <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
           <div className="absolute bottom-2 left-2 text-xs text-white/80 bg-black/40 px-2 py-1 rounded">Participante</div>
         </div>
 
-        <div className="rounded-2xl bg-black/30 border border-white/10 overflow-hidden aspect-video relative">
+        <div className={`rounded-2xl bg-black/30 border overflow-hidden aspect-video relative transition-all duration-200 ${localSpeaking ? 'border-green-400 shadow-[0_0_0_2px_rgba(74,222,128,0.45)]' : 'border-white/10'}`}>
           {callMode === 'video' ? (
             <video ref={localVideoRef} autoPlay muted playsInline className="w-full h-full object-cover scale-x-[-1]" />
           ) : (
@@ -388,7 +553,7 @@ export default function CallOverlay() {
 
           {callMode === 'video' && (
             <button
-              onClick={toggleCam}
+              onClick={() => void toggleCam()}
               className={`w-12 h-12 rounded-full flex items-center justify-center transition-colors ${
                 camOn ? 'bg-call-muted text-call-foreground hover:opacity-80' : 'bg-destructive text-destructive-foreground'
               }`}
