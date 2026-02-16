@@ -62,6 +62,15 @@ async def broadcast_to_chat(chat_id: str, type_: str, data: dict):
                 pass
 
 
+
+
+async def send_to_user(user_id: str, type_: str, data: dict):
+    msg = protocol.make(type_, data)
+    for w in list(user_to_ws.get(user_id, set())):
+        try:
+            await w.send(msg)
+        except:
+            pass
 def bind_session(ws, user_id: str):
     ws_to_user[ws] = user_id
     user_to_ws.setdefault(user_id, set()).add(ws)
@@ -186,11 +195,14 @@ async def handle_chat_create_direct(ws, user_id, data):
     if not target_id:
         await send(ws, "error", {"message": "Falta userId"})
         return
+    if target_id == user_id:
+        await send(ws, "error", {"message": "No puedes crear chat contigo mismo"})
+        return
 
     # existe?
     existing = db.find_direct_chat_between(user_id, target_id)
     if existing:
-        await send(ws, "chat:created", {"chat": existing})
+        await send(ws, "chat:created", {"chat": existing, "autoSelect": True})
         return
 
     target = db.get_user_public_by_id(target_id)
@@ -198,8 +210,12 @@ async def handle_chat_create_direct(ws, user_id, data):
         await send(ws, "error", {"message": "Usuario destino no existe"})
         return
 
-    chat = db.create_direct_chat(user_id, target_id, title=target["displayName"] or target["username"])
-    await send(ws, "chat:created", {"chat": chat})
+    chat = db.create_direct_chat(user_id, target_id)
+    await send(ws, "chat:created", {"chat": chat, "autoSelect": True})
+
+    target_view = db.get_chat_for_user(chat["id"], target_id)
+    if target_view:
+        await send_to_user(target_id, "chat:created", {"chat": target_view, "autoSelect": False})
 
 
 async def handle_group_create(ws, user_id, data):

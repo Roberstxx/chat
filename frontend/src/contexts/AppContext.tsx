@@ -133,10 +133,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       if (type === "chat:created") {
         const chat = mapBackendChat(data.chat);
+        const autoSelect = Boolean(data.autoSelect);
         setState((s) => {
           const exists = s.chats.some((c) => c.id === chat.id);
-          const chats = exists ? s.chats : [...s.chats, chat];
-          return { ...s, chats, activeChat: chat };
+          const chats = exists ? s.chats.map((c) => (c.id === chat.id ? chat : c)) : [...s.chats, chat];
+          return { ...s, chats, activeChat: autoSelect ? chat : s.activeChat };
         });
         return;
       }

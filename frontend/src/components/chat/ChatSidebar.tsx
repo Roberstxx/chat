@@ -26,7 +26,7 @@ export default function ChatSidebar({ onNewGroup, onNewDirect }: ChatSidebarProp
   };
 
   return (
-    <aside className="w-80 h-full flex flex-col bg-card border-r border-border shrink-0">
+    <aside className="w-full md:w-80 h-full flex flex-col bg-card border-r border-border shrink-0">
       {/* Profile */}
       <div className="p-4 border-b border-border flex items-center gap-3">
         <div className="relative">

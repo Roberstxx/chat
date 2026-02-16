@@ -14,7 +14,8 @@ class WSClient {
   private manualClose = false;
 
   connect(token?: string) {
-    const url = (import.meta.env.VITE_WS_URL as string) || "ws://localhost:8765";
+    const fallbackHost = typeof window !== "undefined" ? window.location.hostname : "localhost";
+    const url = (import.meta.env.VITE_WS_URL as string) || `ws://${fallbackHost}:8765`;
     this.url = url;
     this.helloToken = token;
     this.manualClose = false;
