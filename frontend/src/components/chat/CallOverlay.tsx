@@ -1,5 +1,5 @@
 import { useApp } from '@/contexts/AppContext';
-import { Mic, MicOff, Video, VideoOff, PhoneOff, Monitor } from 'lucide-react';
+import { Mic, MicOff, Video, VideoOff, PhoneOff, Monitor, Phone, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { RtcSignal } from '@/types';
 import { toast } from '@/components/ui/use-toast';
@@ -19,12 +19,15 @@ export default function CallOverlay() {
   const [status, setStatus] = useState('Conectando...');
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [incomingOffer, setIncomingOffer] = useState<RtcSignal | null>(null);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const endedRef = useRef(false);
+  const acceptIncomingRef = useRef<((signal: RtcSignal) => Promise<void>) | null>(null);
+  const rejectIncomingRef = useRef<(() => void) | null>(null);
 
   const callChat = useMemo(() => chats.find((c) => c.id === callChatId) ?? null, [chats, callChatId]);
   const peer = useMemo(() => {
@@ -48,6 +51,7 @@ export default function CallOverlay() {
 
     const stopMedia = () => {
       setRemoteStream(null);
+      setIncomingOffer(null);
       setLocalStream((prev) => {
         prev?.getTracks().forEach((t) => t.stop());
         return null;
@@ -101,8 +105,8 @@ export default function CallOverlay() {
       const insecureContext = typeof window !== 'undefined' && !window.isSecureContext && window.location.hostname !== 'localhost';
       if (insecureContext) {
         toast({
-          title: 'Permisos bloqueados por el navegador',
-          description: 'Para cámara/micrófono en red local usa HTTPS o localhost.',
+          title: 'Tu navegador bloquea permisos en HTTP',
+          description: 'En móvil usa HTTPS o abre desde localhost para que pida cámara/micrófono.',
         });
       }
 
@@ -124,8 +128,8 @@ export default function CallOverlay() {
 
         if (err?.name === 'NotAllowedError') {
           toast({
-            title: 'Permiso de micrófono/cámara denegado',
-            description: 'Haz clic en el candado del navegador y permite cámara/micrófono para esta web.',
+            title: 'Permiso denegado',
+            description: 'Permite micrófono/cámara en el candado del navegador e intenta otra vez.',
           });
         }
 
@@ -146,7 +150,7 @@ export default function CallOverlay() {
           } catch {
             toast({
               title: 'No se pudo acceder al micrófono',
-              description: 'Revisa permisos del navegador e intenta otra vez.',
+              description: 'Revisa permisos del navegador y vuelve a intentar.',
             });
             throw error;
           }
@@ -177,9 +181,46 @@ export default function CallOverlay() {
         setStatus('Llamando...');
       } catch (error) {
         console.error('[RTC] create offer error', error);
-        toast({ title: 'No se pudo iniciar la llamada', description: 'Revisa permisos de micrófono/cámara.' });
         safeEndLocal(false);
       }
+    };
+
+    const acceptIncoming = async (signal: RtcSignal) => {
+      try {
+        const targetMode = (signal.mode ?? callMode) === 'video';
+        await setupLocalMedia(targetMode);
+
+        const pc = ensurePeerConnection();
+        if (pc.signalingState === 'closed') return;
+
+        await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        sendRtcSignal({
+          type: 'answer',
+          chatId: callChat.id,
+          toUserId: signal.fromUserId,
+          payload: answer,
+        });
+
+        setIncomingOffer(null);
+        setStatus('Conectando...');
+      } catch (error) {
+        console.error('[RTC] accept call error', error);
+        safeEndLocal(false);
+      }
+    };
+
+    const rejectIncoming = () => {
+      if (incomingOffer) {
+        sendRtcSignal({
+          type: 'end',
+          chatId: callChat.id,
+          toUserId: incomingOffer.fromUserId,
+        });
+      }
+      safeEndLocal(false);
     };
 
     const handleSignal = async (signal: RtcSignal) => {
@@ -192,22 +233,14 @@ export default function CallOverlay() {
         return;
       }
 
+      if (signal.type === 'offer') {
+        setIncomingOffer(signal);
+        setStatus('Llamada entrante...');
+        return;
+      }
+
       try {
         const pc = ensurePeerConnection();
-
-        if (signal.type === 'offer') {
-          await setupLocalMedia((signal.mode ?? callMode) === 'video');
-          await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          sendRtcSignal({
-            type: 'answer',
-            chatId: callChat.id,
-            toUserId: signal.fromUserId,
-            payload: answer,
-          });
-          setStatus('Conectando...');
-        }
 
         if (signal.type === 'answer' && signal.payload && pc.signalingState !== 'closed') {
           await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
@@ -236,12 +269,17 @@ export default function CallOverlay() {
       setStatus('Llamada entrante...');
     }
 
+    acceptIncomingRef.current = acceptIncoming;
+    rejectIncomingRef.current = rejectIncoming;
+
     return () => {
       unsub();
       closePeer();
       stopMedia();
+      acceptIncomingRef.current = null;
+      rejectIncomingRef.current = null;
     };
-  }, [inCall, callChat, peer, user, callMode, callInitiator, onRtcSignal, sendRtcSignal, endCall]);
+  }, [inCall, callChat, peer, user, callMode, callInitiator, onRtcSignal, sendRtcSignal, endCall, incomingOffer]);
 
   if (!inCall || !callChat) return null;
 
@@ -273,6 +311,14 @@ export default function CallOverlay() {
     }
   };
 
+  const incoming = incomingOffer && !callInitiator;
+  const acceptIncoming = () => {
+    if (acceptIncomingRef.current && incomingOffer) void acceptIncomingRef.current(incomingOffer);
+  };
+  const rejectIncoming = () => {
+    if (rejectIncomingRef.current) rejectIncomingRef.current();
+  };
+
   return (
     <div className="fixed inset-0 z-50 bg-call-bg flex flex-col items-center justify-center animate-fade-in p-4">
       <div className="absolute top-6 left-6 text-call-foreground">
@@ -300,47 +346,66 @@ export default function CallOverlay() {
         </div>
       </div>
 
-      <div className="absolute bottom-8 flex items-center gap-4">
-        <button
-          onClick={toggleMic}
-          className={`w-12 h-12 rounded-full flex items-center justify-center transition-colors ${
-            micOn ? 'bg-call-muted text-call-foreground hover:opacity-80' : 'bg-destructive text-destructive-foreground'
-          }`}
-          aria-label={micOn ? 'Silenciar micrófono' : 'Activar micrófono'}
-        >
-          {micOn ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
-        </button>
-
-        {callMode === 'video' && (
+      {incoming ? (
+        <div className="absolute bottom-8 flex items-center gap-4">
           <button
-            onClick={toggleCam}
+            onClick={rejectIncoming}
+            className="w-12 h-12 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center"
+            aria-label="Rechazar llamada"
+          >
+            <X className="w-5 h-5" />
+          </button>
+          <button
+            onClick={acceptIncoming}
+            className="w-14 h-14 rounded-full bg-green-600 text-white flex items-center justify-center"
+            aria-label="Contestar llamada"
+          >
+            <Phone className="w-6 h-6" />
+          </button>
+        </div>
+      ) : (
+        <div className="absolute bottom-8 flex items-center gap-4">
+          <button
+            onClick={toggleMic}
             className={`w-12 h-12 rounded-full flex items-center justify-center transition-colors ${
-              camOn ? 'bg-call-muted text-call-foreground hover:opacity-80' : 'bg-destructive text-destructive-foreground'
+              micOn ? 'bg-call-muted text-call-foreground hover:opacity-80' : 'bg-destructive text-destructive-foreground'
             }`}
-            aria-label={camOn ? 'Apagar cámara' : 'Encender cámara'}
+            aria-label={micOn ? 'Silenciar micrófono' : 'Activar micrófono'}
           >
-            {camOn ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
+            {micOn ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
           </button>
-        )}
 
-        {callMode === 'video' && (
+          {callMode === 'video' && (
+            <button
+              onClick={toggleCam}
+              className={`w-12 h-12 rounded-full flex items-center justify-center transition-colors ${
+                camOn ? 'bg-call-muted text-call-foreground hover:opacity-80' : 'bg-destructive text-destructive-foreground'
+              }`}
+              aria-label={camOn ? 'Apagar cámara' : 'Encender cámara'}
+            >
+              {camOn ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
+            </button>
+          )}
+
+          {callMode === 'video' && (
+            <button
+              onClick={() => void shareScreen()}
+              className="w-12 h-12 rounded-full bg-call-muted text-call-foreground flex items-center justify-center hover:opacity-80 transition-opacity"
+              aria-label="Compartir pantalla"
+            >
+              <Monitor className="w-5 h-5" />
+            </button>
+          )}
+
           <button
-            onClick={() => void shareScreen()}
-            className="w-12 h-12 rounded-full bg-call-muted text-call-foreground flex items-center justify-center hover:opacity-80 transition-opacity"
-            aria-label="Compartir pantalla"
+            onClick={() => endCall(true)}
+            className="w-14 h-14 rounded-full bg-call-danger text-destructive-foreground flex items-center justify-center hover:opacity-80 transition-opacity"
+            aria-label="Colgar"
           >
-            <Monitor className="w-5 h-5" />
+            <PhoneOff className="w-6 h-6" />
           </button>
-        )}
-
-        <button
-          onClick={() => endCall(true)}
-          className="w-14 h-14 rounded-full bg-call-danger text-destructive-foreground flex items-center justify-center hover:opacity-80 transition-opacity"
-          aria-label="Colgar"
-        >
-          <PhoneOff className="w-6 h-6" />
-        </button>
-      </div>
+        </div>
+      )}
     </div>
   );
 }
