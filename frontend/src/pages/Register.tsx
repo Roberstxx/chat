@@ -14,12 +14,13 @@ export default function Register() {
 
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const { registerWS, user } = useApp();
+  const { registerWS, user, authError, clearAuthError } = useApp();
   const navigate = useNavigate();
 
   const set = (key: string) => (e: React.ChangeEvent<HTMLInputElement>) => {
     setForm((f) => ({ ...f, [key]: e.target.value }));
     setErrors((p) => ({ ...p, [key]: "" }));
+    clearAuthError();
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -38,6 +39,7 @@ export default function Register() {
     }
 
     // 🔥 manda al backend (MySQL)
+    clearAuthError();
     registerWS(form.name.trim(), form.username.trim().toLowerCase(), form.email.trim().toLowerCase(), form.password);
   };
 
@@ -85,6 +87,8 @@ export default function Register() {
                 {errors[f.key] && <p className="text-destructive text-sm mt-1">{errors[f.key]}</p>}
               </div>
             ))}
+
+            {authError && <p className="text-destructive text-sm">{authError}</p>}
 
             <button
               type="submit"
