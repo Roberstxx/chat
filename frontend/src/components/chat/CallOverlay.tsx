@@ -384,12 +384,8 @@ export default function CallOverlay() {
       setIncomingOffer(null);
       setStatus('Conectando...');
 
-      if (isGroupCall && user) {
-        const candidates = participants.filter((p) => user.id < p.id && p.id !== fromPeerId);
-        for (const participant of candidates) {
-          await createOfferForPeer(participant.id);
-        }
-      }
+      // En llamada grupal no iniciamos nuevas ofertas desde quien contestó,
+      // para evitar colisiones de negociación. El iniciador conecta a todos.
     };
 
     const rejectIncoming = () => {
@@ -468,9 +464,14 @@ export default function CallOverlay() {
       try {
         await ensureLocalMedia(callMode === 'video');
 
-        if (isGroupCall && user) {
+        if (isGroupCall) {
           setStatus('Llamando al grupo...');
-          const offerTargets = participants.filter((participant) => user.id < participant.id);
+          const offerTargets = [...participants];
+          if (!offerTargets.length) {
+            safeEndLocal(false);
+            return;
+          }
+
           for (const participant of offerTargets) {
             await createOfferForPeer(participant.id);
           }
