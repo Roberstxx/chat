@@ -111,13 +111,45 @@ def list_chats_for_user(user_id: str) -> list[dict]:
     try:
         cur = c.cursor(dictionary=True)
         cur.execute("""
-          SELECT ch.id, ch.type, ch.title, ch.description
+          SELECT ch.id, ch.type, ch.title, ch.description,
+                 m.id AS lastMessageId,
+                 m.chatId AS lastMessageChatId,
+                 m.senderId AS lastMessageSenderId,
+                 m.kind AS lastMessageKind,
+                 m.content AS lastMessageContent,
+                 m.createdAt AS lastMessageCreatedAt
           FROM chats ch
           JOIN chat_members cm ON cm.chatId = ch.id
+          LEFT JOIN messages m ON m.id = (
+            SELECT mm.id
+            FROM messages mm
+            WHERE mm.chatId = ch.id
+            ORDER BY mm.createdAt DESC
+            LIMIT 1
+          )
           WHERE cm.userId = %s
-          ORDER BY ch.created_at DESC
+          ORDER BY COALESCE(m.createdAt, UNIX_TIMESTAMP(ch.created_at) * 1000) DESC
         """, (user_id,))
-        return cur.fetchall() or []
+        rows = cur.fetchall() or []
+        chats = []
+        for row in rows:
+            chat = {
+                "id": row["id"],
+                "type": row["type"],
+                "title": row["title"],
+                "description": row["description"],
+            }
+            if row.get("lastMessageId"):
+                chat["lastMessage"] = {
+                    "id": row["lastMessageId"],
+                    "chatId": row["lastMessageChatId"],
+                    "senderId": row["lastMessageSenderId"],
+                    "kind": row["lastMessageKind"],
+                    "content": row["lastMessageContent"],
+                    "createdAt": row["lastMessageCreatedAt"],
+                }
+            chats.append(chat)
+        return chats
     finally:
         c.close()
 
@@ -133,6 +165,25 @@ def user_is_member(chat_id: str, user_id: str) -> bool:
     finally:
         c.close()
 
+
+
+def list_related_user_ids(user_id: str) -> list[str]:
+    c = conn()
+    try:
+        cur = c.cursor()
+        cur.execute(
+            """
+            SELECT DISTINCT cm2.userId
+            FROM chat_members cm1
+            JOIN chat_members cm2 ON cm2.chatId = cm1.chatId
+            WHERE cm1.userId = %s
+            """,
+            (user_id,),
+        )
+        rows = cur.fetchall() or []
+        return [r[0] for r in rows]
+    finally:
+        c.close()
 def list_user_ids_for_chat(chat_id: str) -> list[str]:
     c = conn()
     try:
@@ -221,5 +272,26 @@ def save_message(chat_id: str, sender_id: str, kind: str, content: str) -> dict:
             "content": content,
             "createdAt": created_ms,
         }
+    finally:
+        c.close()
+
+
+def list_messages(chat_id: str, limit: int = 150) -> list[dict]:
+    c = conn()
+    try:
+        cur = c.cursor(dictionary=True)
+        cur.execute(
+            """
+            SELECT id, chatId, senderId, kind, content, createdAt
+            FROM messages
+            WHERE chatId=%s
+            ORDER BY createdAt DESC
+            LIMIT %s
+            """,
+            (chat_id, limit),
+        )
+        rows = cur.fetchall() or []
+        rows.reverse()
+        return rows
     finally:
         c.close()

@@ -16,7 +16,7 @@ PORT = int(os.getenv("PORT", "8765"))
 
 # --- sesiones ---
 ws_to_user: Dict[websockets.WebSocketServerProtocol, str] = {}
-user_to_ws: Dict[str, websockets.WebSocketServerProtocol] = {}
+user_to_ws: Dict[str, Set[websockets.WebSocketServerProtocol]] = {}
 
 # rooms por chatId (opcional, pero útil)
 rooms: Dict[str, Set[websockets.WebSocketServerProtocol]] = {}
@@ -55,8 +55,22 @@ async def broadcast_to_chat(chat_id: str, type_: str, data: dict):
     member_ids = db.list_user_ids_for_chat(chat_id)
     msg = protocol.make(type_, data)
     for uid in member_ids:
-        w = user_to_ws.get(uid)
-        if w:
+        for w in list(user_to_ws.get(uid, set())):
+            try:
+                await w.send(msg)
+            except:
+                pass
+
+
+def bind_session(ws, user_id: str):
+    ws_to_user[ws] = user_id
+    user_to_ws.setdefault(user_id, set()).add(ws)
+
+
+async def broadcast_presence(user_id: str, status: str):
+    msg = protocol.make("presence:update", {"userId": user_id, "status": status})
+    for uid in db.list_related_user_ids(user_id):
+        for w in list(user_to_ws.get(uid, set())):
             try:
                 await w.send(msg)
             except:
@@ -82,13 +96,11 @@ async def handle_hello(ws, data):
         return
 
     # guardar sesión
-    ws_to_user[ws] = user_id
-    user_to_ws[user_id] = ws
+    bind_session(ws, user_id)
     db.set_user_status(user_id, "online")
 
     await send(ws, "hello:ok", {"userId": user_id})
-    # opcional: manda presencia
-    await send(ws, "presence:update", {"userId": user_id, "status": "online"})
+    await broadcast_presence(user_id, "online")
 
 
 async def handle_auth_register(ws, data):
@@ -113,8 +125,7 @@ async def handle_auth_register(ws, data):
     u = db.create_user(username=username, displayName=displayName, email=email or None, password_hash=password_hash)
 
     token = auth.create_token(u["id"], u["username"])
-    ws_to_user[ws] = u["id"]
-    user_to_ws[u["id"]] = ws
+    bind_session(ws, u["id"])
     db.set_user_status(u["id"], "online")
 
     await send(ws, "auth:ok", {"token": token, "user": sanitize_user({**u, "status": "online"})})
@@ -144,8 +155,7 @@ async def handle_auth_login(ws, data):
         return
 
     token = auth.create_token(u["id"], u["username"])
-    ws_to_user[ws] = u["id"]
-    user_to_ws[u["id"]] = ws
+    bind_session(ws, u["id"])
     db.set_user_status(u["id"], "online")
 
     await send(ws, "auth:ok", {"token": token, "user": sanitize_user({**u, "status": "online"})})
@@ -227,6 +237,17 @@ async def handle_room_join(ws, user_id, data):
         return
     rooms.setdefault(chat_id, set()).add(ws)
     await send(ws, "room:join:ok", {"chatId": chat_id})
+    messages = db.list_messages(chat_id)
+    await send(ws, "message:list:ok", {"chatId": chat_id, "messages": messages})
+
+
+async def handle_presence_update(ws, user_id, data):
+    status = (data or {}).get("status", "").strip().lower()
+    if status not in {"online", "offline", "busy"}:
+        await send(ws, "error", {"message": "Estado inválido"})
+        return
+    db.set_user_status(user_id, status)
+    await broadcast_presence(user_id, status)
 
 
 async def handle_message_send(ws, user_id, data):
@@ -285,6 +306,8 @@ async def router(ws, msg: dict):
     # messages
     if t == "message:send":
         return await handle_message_send(ws, user_id, d)
+    if t == "presence:update":
+        return await handle_presence_update(ws, user_id, d)
 
     await send(ws, "error", {"message": f"Evento no soportado: {t}"})
 
@@ -302,9 +325,13 @@ async def handler(ws):
         # cleanup
         uid = ws_to_user.pop(ws, None)
         if uid:
-            if user_to_ws.get(uid) is ws:
-                user_to_ws.pop(uid, None)
-            db.set_user_status(uid, "offline")
+            sockets = user_to_ws.get(uid)
+            if sockets:
+                sockets.discard(ws)
+                if not sockets:
+                    user_to_ws.pop(uid, None)
+                    db.set_user_status(uid, "offline")
+                    await broadcast_presence(uid, "offline")
         # saca de rooms
         for s in rooms.values():
             s.discard(ws)
