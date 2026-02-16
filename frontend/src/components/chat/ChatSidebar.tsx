@@ -26,7 +26,7 @@ export default function ChatSidebar({ onNewGroup, onNewDirect }: ChatSidebarProp
   };
 
   return (
-    <aside className="w-80 h-full flex flex-col bg-card border-r border-border shrink-0">
+    <aside className="w-full md:w-80 h-full flex flex-col bg-card border-r border-border shrink-0">
       {/* Profile */}
       <div className="p-4 border-b border-border flex items-center gap-3">
         <div className="relative">
@@ -97,6 +97,7 @@ export default function ChatSidebar({ onNewGroup, onNewDirect }: ChatSidebarProp
               active={activeChat?.id === chat.id}
               onClick={() => setActiveChat(chat)}
               formatTime={formatTime}
+              currentUserId={user?.id}
             />
           ))
         )}
@@ -117,8 +118,8 @@ export default function ChatSidebar({ onNewGroup, onNewDirect }: ChatSidebarProp
   );
 }
 
-function ChatItem({ chat, active, onClick, formatTime }: { chat: Chat; active: boolean; onClick: () => void; formatTime: (ts?: number) => string }) {
-  const otherMember = chat.type === 'direct' ? chat.members.find((m) => m.id !== 'u1') : null;
+function ChatItem({ chat, active, onClick, formatTime, currentUserId }: { chat: Chat; active: boolean; onClick: () => void; formatTime: (ts?: number) => string; currentUserId?: string }) {
+  const otherMember = chat.type === 'direct' ? chat.members.find((m) => m.id !== currentUserId) : null;
 
   return (
     <button
