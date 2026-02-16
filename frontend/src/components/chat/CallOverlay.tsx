@@ -54,7 +54,7 @@ export default function CallOverlay() {
     consumePendingIncomingOffer,
   } = useApp();
 
-  const [micOn, setMicOn] = useState(true);
+  const [micOn, setMicOn] = useState(false);
   const [camOn, setCamOn] = useState(true);
   const [status, setStatus] = useState('Conectando...');
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
@@ -292,9 +292,13 @@ export default function CallOverlay() {
           if (videoTrack) stream.addTrack(videoTrack);
         }
 
+        stream.getAudioTracks().forEach((track) => {
+          track.enabled = false;
+        });
+
         localStreamRef.current = stream;
         setLocalStream(stream);
-        setMicOn(true);
+        setMicOn(false);
         setCamOn(videoEnabled && stream.getVideoTracks().length > 0);
         return stream;
       } catch (error) {
@@ -305,9 +309,13 @@ export default function CallOverlay() {
               title: 'Cámara no disponible',
               description: 'Se iniciará la llamada solo con audio.',
             });
+            audioOnly.getAudioTracks().forEach((track) => {
+              track.enabled = false;
+            });
+
             localStreamRef.current = audioOnly;
             setLocalStream(audioOnly);
-            setMicOn(true);
+            setMicOn(false);
             setCamOn(false);
             return audioOnly;
           } catch {
@@ -640,8 +648,10 @@ export default function CallOverlay() {
             key={tile.id}
             className={`rounded-2xl bg-black/40 border overflow-hidden aspect-video relative transition-all duration-200 ${tile.speaking ? 'border-green-400 shadow-[0_0_0_2px_rgba(74,222,128,0.45)]' : 'border-white/10'}`}
           >
-            {callMode === 'video' ? (
+            {callMode === 'video' && tile.stream ? (
               <MediaStreamView stream={tile.stream} />
+            ) : callMode === 'video' ? (
+              <div className="w-full h-full flex items-center justify-center text-call-foreground/75 text-sm">Esperando cámara…</div>
             ) : (
               <div className="w-full h-full flex items-center justify-center text-call-foreground text-xl">Audio</div>
             )}

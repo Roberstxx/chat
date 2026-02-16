@@ -81,17 +81,39 @@ function mapBackendChat(ch: any): Chat {
 }
 
 const AUTH_EVENT_TYPES = new Set(["auth:error", "error"]);
+const CALL_STORAGE_KEY = "activeCall";
+
+type PersistedCall = {
+  chatId: string;
+  mode: CallMode;
+};
+
+function readPersistedCall(): PersistedCall | null {
+  try {
+    const raw = sessionStorage.getItem(CALL_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PersistedCall;
+    if (!parsed?.chatId) return null;
+    const mode: CallMode = parsed.mode === "video" ? "video" : "audio";
+    return { chatId: parsed.chatId, mode };
+  } catch {
+    return null;
+  }
+}
 
 export function AppProvider({ children }: { children: ReactNode }) {
+  const persistedCall = readPersistedCall();
+
   const [state, setState] = useState<AppState>({
     user: null,
     chats: [],
     messages: [],
     activeChat: null,
-    inCall: false,
-    callChatId: null,
-    callMode: "audio",
-    callInitiator: false,
+    inCall: Boolean(persistedCall),
+    callChatId: persistedCall?.chatId ?? null,
+    callMode: persistedCall?.mode ?? "audio",
+    // tras recarga reintentamos reconectar de forma activa
+    callInitiator: Boolean(persistedCall),
     authReady: false,
     authError: null,
   });
@@ -216,6 +238,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
             description: "Tienes una llamada entrante",
           });
 
+          if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
+            navigator.vibrate([130, 80, 130]);
+          }
+
           setState((s) => {
             const nextActive = s.chats.find((c) => c.id === signal.chatId) ?? s.activeChat;
             return {
@@ -231,12 +257,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         if (signal.type === "end") {
           pendingIncomingOfferRef.current = null;
-          setState((s) => ({
-            ...s,
-            inCall: false,
-            callChatId: null,
-            callInitiator: false,
-          }));
+          setState((s) => {
+            const currentCall = s.chats.find((chat) => chat.id === s.callChatId);
+            // en grupos, que cierre individual lo maneja el overlay por peer
+            if (currentCall?.type === "group") return s;
+
+            return {
+              ...s,
+              inCall: false,
+              callChatId: null,
+              callInitiator: false,
+            };
+          });
         }
         return;
       }
@@ -401,6 +433,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     wsClient.send("presence:update", { status });
     setState((s) => (s.user ? { ...s, user: { ...s.user, status } } : s));
   }, []);
+
+  useEffect(() => {
+    if (!state.inCall || !state.callChatId) {
+      sessionStorage.removeItem(CALL_STORAGE_KEY);
+      return;
+    }
+
+    const payload: PersistedCall = {
+      chatId: state.callChatId,
+      mode: state.callMode,
+    };
+    sessionStorage.setItem(CALL_STORAGE_KEY, JSON.stringify(payload));
+  }, [state.inCall, state.callChatId, state.callMode]);
 
   return (
     <AppContext.Provider
