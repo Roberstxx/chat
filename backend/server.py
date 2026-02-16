@@ -334,9 +334,17 @@ async def handler(ws):
             try:
                 msg = protocol.parse(raw)
             except Exception as e:
-                await send(ws, "error", {"message": str(e)})
+                # Si el cliente ya cerró conexión, evita intentar enviarle errores
+                if not ws.closed:
+                    await send(ws, "error", {"message": str(e)})
                 continue
             await router(ws, msg)
+    except websockets.exceptions.ConnectionClosedOK:
+        # cierre normal del cliente
+        pass
+    except (websockets.exceptions.ConnectionClosedError, ConnectionResetError) as e:
+        # en Windows/LAN es común ver WinError 64 cuando cliente pierde red
+        print(f"[WS] conexión cerrada abruptamente: {e}")
     finally:
         # cleanup
         uid = ws_to_user.pop(ws, None)
