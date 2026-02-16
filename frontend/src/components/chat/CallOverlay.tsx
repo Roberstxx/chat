@@ -11,6 +11,74 @@ const RTC_CONFIG: RTCConfiguration = {
   ],
 };
 
+function attachMedia(el: HTMLMediaElement | null, stream: MediaStream | null, muted = false) {
+  if (!el) return;
+  el.srcObject = stream;
+  el.muted = muted;
+  if (!stream) return;
+  void el
+    .play()
+    .catch(() => {
+      // autoplay may fail until first user gesture.
+    });
+}
+
+function useSpeakingActivity(stream: MediaStream | null): boolean {
+  const [speaking, setSpeaking] = useState(false);
+
+  useEffect(() => {
+    if (!stream) {
+      setSpeaking(false);
+      return;
+    }
+
+    const audioTrack = stream.getAudioTracks()[0];
+    if (!audioTrack) {
+      setSpeaking(false);
+      return;
+    }
+
+    const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextCtor) {
+      setSpeaking(false);
+      return;
+    }
+
+    const ctx = new AudioContextCtor();
+    const source = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    source.connect(analyser);
+
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    let rafId = 0;
+
+    const tick = () => {
+      analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (let i = 0; i < data.length; i += 1) {
+        const normalized = (data[i] - 128) / 128;
+        sum += normalized * normalized;
+      }
+      const rms = Math.sqrt(sum / data.length);
+      setSpeaking(rms > 0.04 && audioTrack.enabled && audioTrack.readyState === 'live');
+      rafId = requestAnimationFrame(tick);
+    };
+
+    rafId = requestAnimationFrame(tick);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      source.disconnect();
+      analyser.disconnect();
+      void ctx.close();
+      setSpeaking(false);
+    };
+  }, [stream]);
+
+  return speaking;
+}
+
 export default function CallOverlay() {
   const { inCall, endCall, callChatId, callMode, callInitiator, chats, user, sendRtcSignal, onRtcSignal, consumePendingIncomingOffer } = useApp();
 
@@ -26,6 +94,7 @@ export default function CallOverlay() {
   const localStreamRef = useRef<MediaStream | null>(null);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const endedRef = useRef(false);
   const acceptIncomingRef = useRef<((signal: RtcSignal) => Promise<void>) | null>(null);
   const rejectIncomingRef = useRef<(() => void) | null>(null);
@@ -36,18 +105,22 @@ export default function CallOverlay() {
     return callChat.members.find((m) => m.id !== user.id) ?? null;
   }, [callChat, user]);
 
-  useEffect(() => {
-    localStreamRef.current = localStream;
-    if (localVideoRef.current) localVideoRef.current.srcObject = localStream;
-  }, [localStream]);
-
-  useEffect(() => {
-    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStream;
-  }, [remoteStream]);
+  const localSpeaking = useSpeakingActivity(localStream);
+  const remoteSpeaking = useSpeakingActivity(remoteStream);
 
   useEffect(() => {
     incomingOfferRef.current = incomingOffer;
   }, [incomingOffer]);
+
+  useEffect(() => {
+    localStreamRef.current = localStream;
+    attachMedia(localVideoRef.current, localStream, true);
+  }, [localStream]);
+
+  useEffect(() => {
+    attachMedia(remoteVideoRef.current, remoteStream, false);
+    attachMedia(remoteAudioRef.current, remoteStream, false);
+  }, [remoteStream]);
 
   useEffect(() => {
     if (!inCall || !callChat || !peer || !user) return;
@@ -98,7 +171,6 @@ export default function CallOverlay() {
         setRemoteStream(event.streams[0]);
         setStatus('En llamada');
       };
-
       pcRef.current = pc;
       return pc;
     };
@@ -110,22 +182,25 @@ export default function CallOverlay() {
       if (insecureContext) {
         toast({
           title: 'Tu navegador bloquea permisos en HTTP',
-          description: 'En móvil usa HTTPS o abre desde localhost para que pida cámara/micrófono.',
+          description: 'En móvil usa HTTPS o abre desde localhost para permitir cámara/micrófono.',
         });
       }
 
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-          video: videoEnabled,
+      const addTracksToPeer = (stream: MediaStream) => {
+        const pc = ensurePeerConnection();
+        stream.getTracks().forEach((track) => {
+          const alreadySending = pc.getSenders().some((sender) => sender.track?.id === track.id);
+          if (!alreadySending) pc.addTrack(track, stream);
         });
+      };
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: videoEnabled });
         localStreamRef.current = stream;
         setLocalStream(stream);
         setMicOn(true);
         setCamOn(videoEnabled && stream.getVideoTracks().length > 0);
-
-        const pc = ensurePeerConnection();
-        stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+        addTracksToPeer(stream);
         return stream;
       } catch (error) {
         const err = error as DOMException;
@@ -133,23 +208,19 @@ export default function CallOverlay() {
         if (err?.name === 'NotAllowedError') {
           toast({
             title: 'Permiso denegado',
-            description: 'Permite micrófono/cámara en el candado del navegador e intenta otra vez.',
+            description: 'Permite micrófono/cámara en el candado del navegador y vuelve a intentar.',
           });
         }
 
         if (videoEnabled) {
           try {
             const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-            toast({
-              title: 'Cámara no disponible',
-              description: 'Se iniciará la llamada solo con audio.',
-            });
+            toast({ title: 'Cámara no disponible', description: 'La llamada seguirá solo con audio.' });
             localStreamRef.current = audioStream;
             setLocalStream(audioStream);
             setMicOn(true);
             setCamOn(false);
-            const pc = ensurePeerConnection();
-            audioStream.getTracks().forEach((track) => pc.addTrack(track, audioStream));
+            addTracksToPeer(audioStream);
             return audioStream;
           } catch {
             toast({
@@ -169,10 +240,9 @@ export default function CallOverlay() {
         const pc = ensurePeerConnection();
         await setupLocalMedia(callMode === 'video');
 
-        if (!pcRef.current || pcRef.current.signalingState === 'closed') return;
-
+        if (pc.signalingState === 'closed') return;
         const offer = await pc.createOffer();
-        if (!pcRef.current || pcRef.current.signalingState === 'closed') return;
+        if (pc.signalingState === 'closed') return;
 
         await pc.setLocalDescription(offer);
         sendRtcSignal({
@@ -219,11 +289,7 @@ export default function CallOverlay() {
     const rejectIncoming = () => {
       const pending = incomingOfferRef.current;
       if (pending) {
-        sendRtcSignal({
-          type: 'end',
-          chatId: callChat.id,
-          toUserId: pending.fromUserId,
-        });
+        sendRtcSignal({ type: 'end', chatId: callChat.id, toUserId: pending.fromUserId });
       }
       safeEndLocal(false);
     };
@@ -272,9 +338,7 @@ export default function CallOverlay() {
       void createOutgoingOffer();
     } else {
       const pending = consumePendingIncomingOffer(callChat.id);
-      if (pending) {
-        setIncomingOffer(pending);
-      }
+      if (pending) setIncomingOffer(pending);
       setStatus('Llamada entrante...');
     }
 
@@ -295,30 +359,34 @@ export default function CallOverlay() {
   if (!inCall || !callChat) return null;
 
   const toggleMic = () => {
-    localStreamRef.current?.getAudioTracks().forEach((t) => {
-      t.enabled = !micOn;
+    localStreamRef.current?.getAudioTracks().forEach((track) => {
+      track.enabled = !micOn;
     });
     setMicOn((v) => !v);
   };
 
   const toggleCam = () => {
-    localStreamRef.current?.getVideoTracks().forEach((t) => {
-      t.enabled = !camOn;
+    localStreamRef.current?.getVideoTracks().forEach((track) => {
+      track.enabled = !camOn;
     });
     setCamOn((v) => !v);
   };
 
   const shareScreen = async () => {
     if (!pcRef.current) return;
-    const display = await navigator.mediaDevices.getDisplayMedia({ video: true });
-    const [videoTrack] = display.getVideoTracks();
-    const sender = pcRef.current.getSenders().find((s) => s.track?.kind === 'video');
-    if (sender && videoTrack) {
-      await sender.replaceTrack(videoTrack);
-      videoTrack.onended = async () => {
-        const camTrack = localStreamRef.current?.getVideoTracks()?.[0];
-        if (camTrack) await sender.replaceTrack(camTrack);
-      };
+    try {
+      const display = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      const [videoTrack] = display.getVideoTracks();
+      const sender = pcRef.current.getSenders().find((s) => s.track?.kind === 'video');
+      if (sender && videoTrack) {
+        await sender.replaceTrack(videoTrack);
+        videoTrack.onended = async () => {
+          const camTrack = localStreamRef.current?.getVideoTracks()?.[0];
+          if (camTrack) await sender.replaceTrack(camTrack);
+        };
+      }
+    } catch {
+      toast({ title: 'No se pudo compartir pantalla', description: 'Intenta de nuevo y acepta el selector de pantalla.' });
     }
   };
 
@@ -337,8 +405,14 @@ export default function CallOverlay() {
         <p className="text-sm opacity-70">{status}</p>
       </div>
 
+      <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
+
       <div className="w-full max-w-5xl grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="rounded-2xl bg-black/40 border border-white/10 overflow-hidden aspect-video relative">
+        <div
+          className={`rounded-2xl bg-black/40 border overflow-hidden aspect-video relative transition-shadow duration-200 ${
+            remoteSpeaking ? 'shadow-[0_0_0_3px_rgba(34,197,94,0.85)] border-green-400/70' : 'border-white/10'
+          }`}
+        >
           {callMode === 'video' ? (
             <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-cover" />
           ) : (
@@ -347,7 +421,11 @@ export default function CallOverlay() {
           <div className="absolute bottom-2 left-2 text-xs text-white/80 bg-black/40 px-2 py-1 rounded">Participante</div>
         </div>
 
-        <div className="rounded-2xl bg-black/30 border border-white/10 overflow-hidden aspect-video relative">
+        <div
+          className={`rounded-2xl bg-black/30 border overflow-hidden aspect-video relative transition-shadow duration-200 ${
+            localSpeaking ? 'shadow-[0_0_0_3px_rgba(34,197,94,0.85)] border-green-400/70' : 'border-white/10'
+          }`}
+        >
           {callMode === 'video' ? (
             <video ref={localVideoRef} autoPlay muted playsInline className="w-full h-full object-cover scale-x-[-1]" />
           ) : (
