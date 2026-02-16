@@ -9,7 +9,7 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [errors, setErrors] = useState<{ email?: string; password?: string; server?: string }>({});
 
-  const { loginWS, user } = useApp();
+  const { loginWS, user, authError, clearAuthError } = useApp();
   const navigate = useNavigate();
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -25,6 +25,7 @@ export default function Login() {
     }
 
     // 🔥 manda al backend
+    clearAuthError();
     loginWS(emailOrUser.trim(), password);
   };
 
@@ -58,6 +59,7 @@ export default function Login() {
                 onChange={(e) => {
                   setEmailOrUser(e.target.value);
                   setErrors((p) => ({ ...p, email: undefined, server: undefined }));
+                  clearAuthError();
                 }}
                 className="w-full px-4 py-2.5 rounded-lg bg-muted border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring transition-all"
                 placeholder="tu@email.com o usuario"
@@ -77,6 +79,7 @@ export default function Login() {
                 onChange={(e) => {
                   setPassword(e.target.value);
                   setErrors((p) => ({ ...p, password: undefined, server: undefined }));
+                  clearAuthError();
                 }}
                 className="w-full px-4 py-2.5 rounded-lg bg-muted border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring transition-all"
                 placeholder="••••••••"
@@ -85,7 +88,7 @@ export default function Login() {
               {errors.password && <p className="text-destructive text-sm mt-1">{errors.password}</p>}
             </div>
 
-            {errors.server && <p className="text-destructive text-sm">{errors.server}</p>}
+            {(errors.server || authError) && <p className="text-destructive text-sm">{errors.server || authError}</p>}
 
             <button
               type="submit"

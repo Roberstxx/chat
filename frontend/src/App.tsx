@@ -12,13 +12,19 @@ import NotFound from "./pages/NotFound";
 const queryClient = new QueryClient();
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { user } = useApp();
+  const { user, authReady } = useApp();
+  if (!authReady) return null;
   if (!user) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
 
 function AppRoutes() {
-  const { user } = useApp();
+  const { user, authReady } = useApp();
+
+  if (!authReady) {
+    return <div className="min-h-screen grid place-items-center text-muted-foreground">Cargando sesión…</div>;
+  }
+
   return (
     <Routes>
       <Route path="/login" element={user ? <Navigate to="/app" replace /> : <Login />} />
