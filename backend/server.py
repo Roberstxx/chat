@@ -71,6 +71,19 @@ async def send_to_user(user_id: str, type_: str, data: dict):
             await w.send(msg)
         except:
             pass
+
+
+async def broadcast_to_chat_members(chat_id: str, type_: str, data: dict, exclude_user_id: str | None = None):
+    msg = protocol.make(type_, data)
+    for uid in db.list_user_ids_for_chat(chat_id):
+        if exclude_user_id and uid == exclude_user_id:
+            continue
+        for w in list(user_to_ws.get(uid, set())):
+            try:
+                await w.send(msg)
+            except:
+                pass
+
 def bind_session(ws, user_id: str):
     ws_to_user[ws] = user_id
     user_to_ws.setdefault(user_id, set()).add(ws)
@@ -266,6 +279,42 @@ async def handle_presence_update(ws, user_id, data):
     await broadcast_presence(user_id, status)
 
 
+async def handle_rtc_signal(ws, user_id, data):
+    signal_type = (data or {}).get("type")
+    chat_id = (data or {}).get("chatId")
+    to_user_id = (data or {}).get("toUserId")
+    payload = (data or {}).get("payload")
+    mode = (data or {}).get("mode")
+
+    if signal_type not in {"offer", "answer", "ice", "end"}:
+        await send(ws, "error", {"message": "Señal RTC inválida"})
+        return
+    if not chat_id:
+        await send(ws, "error", {"message": "Falta chatId"})
+        return
+    if not db.user_is_member(chat_id, user_id):
+        await send(ws, "error", {"message": "No eres miembro de ese chat"})
+        return
+
+    out = {
+        "type": signal_type,
+        "chatId": chat_id,
+        "fromUserId": user_id,
+        "toUserId": to_user_id,
+        "payload": payload,
+        "mode": mode,
+    }
+
+    if to_user_id:
+        if not db.user_is_member(chat_id, to_user_id):
+            await send(ws, "error", {"message": "Destino RTC inválido"})
+            return
+        await send_to_user(to_user_id, "rtc:signal", out)
+        return
+
+    await broadcast_to_chat_members(chat_id, "rtc:signal", out, exclude_user_id=user_id)
+
+
 async def handle_message_send(ws, user_id, data):
     chat_id = (data or {}).get("chatId")
     kind = (data or {}).get("kind", "text")
@@ -324,6 +373,8 @@ async def router(ws, msg: dict):
         return await handle_message_send(ws, user_id, d)
     if t == "presence:update":
         return await handle_presence_update(ws, user_id, d)
+    if t == "rtc:signal":
+        return await handle_rtc_signal(ws, user_id, d)
 
     await send(ws, "error", {"message": f"Evento no soportado: {t}"})
 

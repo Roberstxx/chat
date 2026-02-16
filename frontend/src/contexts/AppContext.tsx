@@ -6,8 +6,9 @@ import React, {
   useCallback,
   ReactNode,
   useEffect,
+  useRef,
 } from "react";
-import { User, Chat, Message } from "@/types";
+import { User, Chat, Message, RtcSignal, CallMode } from "@/types";
 import { wsClient } from "@/services/wsClient";
 
 interface AppState {
@@ -17,6 +18,8 @@ interface AppState {
   activeChat: Chat | null;
   inCall: boolean;
   callChatId: string | null;
+  callMode: CallMode;
+  callInitiator: boolean;
   authReady: boolean;
   authError: string | null;
 }
@@ -42,8 +45,10 @@ interface AppContextType extends AppState {
   findUserByUsername: (username: string) => Promise<User | null>;
   createDirectChatByUsername: (username: string) => Promise<boolean>;
 
-  startCall: (chatId: string) => void;
-  endCall: () => void;
+  startCall: (chatId: string, mode?: CallMode) => void;
+  endCall: (notifyPeer?: boolean) => void;
+  sendRtcSignal: (signal: Omit<RtcSignal, "fromUserId">) => void;
+  onRtcSignal: (handler: (signal: RtcSignal) => void) => () => void;
 
   updateStatus: (status: User["status"]) => void;
 
@@ -83,9 +88,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     activeChat: null,
     inCall: false,
     callChatId: null,
+    callMode: "audio",
+    callInitiator: false,
     authReady: false,
     authError: null,
   });
+
+
+  const rtcListenersRef = useRef(new Set<(signal: RtcSignal) => void>());
+
+  const emitRtcSignal = useCallback((signal: RtcSignal) => {
+    rtcListenersRef.current.forEach((handler) => handler(signal));
+  }, []);
 
   useEffect(() => {
     const token = localStorage.getItem("token") || undefined;
@@ -182,6 +196,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return;
       }
 
+      if (type === "rtc:signal") {
+        const signal = data as RtcSignal;
+        emitRtcSignal(signal);
+
+        if (signal.type === "offer") {
+          setState((s) => {
+            const nextActive = s.chats.find((c) => c.id === signal.chatId) ?? s.activeChat;
+            return {
+              ...s,
+              inCall: true,
+              callChatId: signal.chatId,
+              callMode: signal.mode ?? "audio",
+              callInitiator: false,
+              activeChat: nextActive,
+            };
+          });
+        }
+
+        if (signal.type === "end") {
+          setState((s) => ({
+            ...s,
+            inCall: false,
+            callChatId: null,
+            callInitiator: false,
+          }));
+        }
+        return;
+      }
+
       if (AUTH_EVENT_TYPES.has(type)) {
         const message = data?.message || "Error de autenticación";
 
@@ -241,6 +284,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       messages: [],
       authError: null,
       authReady: true,
+      callChatId: null,
+      callInitiator: false,
     }));
     wsClient.close();
     wsClient.connect();
@@ -306,12 +351,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [findUserByUsername]
   );
 
-  const startCall = useCallback((chatId: string) => {
-    setState((s) => ({ ...s, inCall: true, callChatId: chatId }));
+  const sendRtcSignal = useCallback((signal: Omit<RtcSignal, "fromUserId">) => {
+    wsClient.send("rtc:signal", signal);
   }, []);
 
-  const endCall = useCallback(() => {
-    setState((s) => ({ ...s, inCall: false, callChatId: null }));
+  const onRtcSignal = useCallback((handler: (signal: RtcSignal) => void) => {
+    rtcListenersRef.current.add(handler);
+    return () => rtcListenersRef.current.delete(handler);
+  }, []);
+
+  const startCall = useCallback((chatId: string, mode: CallMode = "audio") => {
+    setState((s) => ({ ...s, inCall: true, callChatId: chatId, callMode: mode, callInitiator: true }));
+  }, []);
+
+  const endCall = useCallback((notifyPeer: boolean = true) => {
+    setState((s) => {
+      if (notifyPeer && s.callChatId) {
+        wsClient.send("rtc:signal", { type: "end", chatId: s.callChatId });
+      }
+      return { ...s, inCall: false, callChatId: null, callInitiator: false };
+    });
   }, []);
 
   const updateStatus = useCallback((status: User["status"]) => {
@@ -331,6 +390,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         sendMessage,
         startCall,
         endCall,
+        sendRtcSignal,
+        onRtcSignal,
         createGroup,
         createDirectChat,
         inviteToGroup,

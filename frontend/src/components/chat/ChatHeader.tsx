@@ -55,14 +55,14 @@ export default function ChatHeader({ onToggleInfo, infoOpen, onBack, showBack = 
       </div>
       <div className="flex items-center gap-1">
         <button
-          onClick={() => startCall(activeChat.id)}
+          onClick={() => startCall(activeChat.id, "audio")}
           className="p-2 md:p-2.5 rounded-lg hover:bg-muted transition-colors"
           aria-label="Llamada de audio"
         >
           <Phone className="w-4 h-4 text-muted-foreground" />
         </button>
         <button
-          onClick={() => startCall(activeChat.id)}
+          onClick={() => startCall(activeChat.id, "video")}
           className="p-2 md:p-2.5 rounded-lg hover:bg-muted transition-colors"
           aria-label="Videollamada"
         >
