@@ -1,0 +1,145 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+@layer base {
+  :root {
+    --background: 220 20% 97%;
+    --foreground: 220 25% 10%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 25% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 25% 10%;
+
+    --primary: 174 72% 40%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 15% 92%;
+    --secondary-foreground: 220 25% 10%;
+
+    --muted: 220 15% 94%;
+    --muted-foreground: 220 10% 46%;
+
+    --accent: 174 72% 40%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 15% 88%;
+    --input: 220 15% 88%;
+    --ring: 174 72% 40%;
+
+    --radius: 0.75rem;
+
+    --sidebar-background: 220 20% 95%;
+    --sidebar-foreground: 220 15% 25%;
+    --sidebar-primary: 174 72% 40%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 15% 90%;
+    --sidebar-accent-foreground: 220 15% 25%;
+    --sidebar-border: 220 15% 88%;
+    --sidebar-ring: 174 72% 40%;
+
+    /* Custom tokens */
+    --surface-elevated: 0 0% 100%;
+    --surface-sunken: 220 20% 95%;
+    --bubble-mine: 174 72% 40%;
+    --bubble-mine-foreground: 0 0% 100%;
+    --bubble-other: 220 15% 92%;
+    --bubble-other-foreground: 220 25% 10%;
+    --online: 142 72% 45%;
+    --busy: 38 92% 50%;
+    --offline: 220 10% 60%;
+    --call-bg: 220 30% 8%;
+    --call-foreground: 0 0% 95%;
+    --call-button-danger: 0 72% 51%;
+    --call-button-muted: 220 15% 25%;
+  }
+
+  .dark {
+    --background: 225 25% 8%;
+    --foreground: 220 15% 90%;
+
+    --card: 225 22% 11%;
+    --card-foreground: 220 15% 90%;
+
+    --popover: 225 22% 13%;
+    --popover-foreground: 220 15% 90%;
+
+    --primary: 174 72% 46%;
+    --primary-foreground: 225 30% 6%;
+
+    --secondary: 225 20% 16%;
+    --secondary-foreground: 220 15% 85%;
+
+    --muted: 225 20% 14%;
+    --muted-foreground: 220 10% 55%;
+
+    --accent: 174 72% 46%;
+    --accent-foreground: 225 30% 6%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 225 18% 18%;
+    --input: 225 18% 18%;
+    --ring: 174 72% 46%;
+
+    --sidebar-background: 225 25% 6%;
+    --sidebar-foreground: 220 15% 80%;
+    --sidebar-primary: 174 72% 46%;
+    --sidebar-primary-foreground: 225 30% 6%;
+    --sidebar-accent: 225 20% 12%;
+    --sidebar-accent-foreground: 220 15% 85%;
+    --sidebar-border: 225 18% 14%;
+    --sidebar-ring: 174 72% 46%;
+
+    --surface-elevated: 225 22% 13%;
+    --surface-sunken: 225 25% 6%;
+    --bubble-mine: 174 72% 46%;
+    --bubble-mine-foreground: 225 30% 6%;
+    --bubble-other: 225 20% 16%;
+    --bubble-other-foreground: 220 15% 90%;
+    --online: 142 72% 45%;
+    --busy: 38 92% 50%;
+    --offline: 220 10% 40%;
+    --call-bg: 225 30% 5%;
+    --call-foreground: 0 0% 95%;
+    --call-button-danger: 0 72% 51%;
+    --call-button-muted: 225 15% 22%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--muted-foreground) / 0.3);
+    border-radius: 3px;
+  }
+}
