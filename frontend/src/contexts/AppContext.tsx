@@ -17,10 +17,11 @@ interface AppState {
   activeChat: Chat | null;
   inCall: boolean;
   callChatId: string | null;
+  authReady: boolean;
+  authError: string | null;
 }
 
 interface AppContextType extends AppState {
-  // Auth
   loginWS: (usernameOrEmail: string, password: string) => void;
   registerWS: (
     displayName: string,
@@ -29,28 +30,23 @@ interface AppContextType extends AppState {
     password: string
   ) => void;
   logout: () => void;
+  clearAuthError: () => void;
 
-  // UI
   setActiveChat: (chat: Chat | null) => void;
 
-  // Chat actions
   sendMessage: (chatId: string, content: string, kind?: Message["kind"]) => void;
   createGroup: (title: string, description?: string) => void;
   createDirectChat: (targetUserId: string) => void;
   inviteToGroup: (groupId: string, userIds: string[]) => void;
 
-  // 🔥 NUEVO: Por username
   findUserByUsername: (username: string) => Promise<User | null>;
   createDirectChatByUsername: (username: string) => Promise<boolean>;
 
-  // Call (solo UI por ahora)
   startCall: (chatId: string) => void;
   endCall: () => void;
 
-  // Presence
   updateStatus: (status: User["status"]) => void;
 
-  // Helpers
   refreshChats: () => void;
 }
 
@@ -77,6 +73,8 @@ function mapBackendChat(ch: any): Chat {
   } as Chat;
 }
 
+const AUTH_EVENT_TYPES = new Set(["auth:error", "error"]);
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppState>({
     user: null,
@@ -85,28 +83,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
     activeChat: null,
     inCall: false,
     callChatId: null,
+    authReady: false,
+    authError: null,
   });
 
-  // Conectar WS al montar y “hello” si hay token
   useEffect(() => {
     const token = localStorage.getItem("token") || undefined;
     wsClient.connect(token);
+
+    if (!token) {
+      setState((s) => ({ ...s, authReady: true }));
+    }
 
     const off = wsClient.on((msg) => {
       const { type, data } = msg;
 
       if (type === "auth:ok") {
-        const token = data.token as string;
+        const nextToken = data.token as string;
         const user = mapBackendUser(data.user);
 
-        localStorage.setItem("token", token);
-        wsClient.connect(token); // reconecta con token => manda hello
+        localStorage.setItem("token", nextToken);
+        wsClient.connect(nextToken);
 
-        setState((s) => ({ ...s, user }));
+        setState((s) => ({ ...s, user, authReady: true, authError: null }));
         return;
       }
 
       if (type === "hello:ok") {
+        setState((s) => ({ ...s, authReady: true, authError: null }));
         wsClient.send("chat:list", {});
         return;
       }
@@ -117,12 +121,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return;
       }
 
+      if (type === "message:list:ok") {
+        const chatId = data.chatId as string;
+        const list = (data.messages || []) as Message[];
+        setState((s) => {
+          const notFromChat = s.messages.filter((m) => m.chatId !== chatId);
+          return { ...s, messages: [...notFromChat, ...list] };
+        });
+        return;
+      }
+
       if (type === "chat:created") {
         const chat = mapBackendChat(data.chat);
+        const autoSelect = Boolean(data.autoSelect);
         setState((s) => {
           const exists = s.chats.some((c) => c.id === chat.id);
-          const chats = exists ? s.chats : [...s.chats, chat];
-          return { ...s, chats, activeChat: chat };
+          const chats = exists ? s.chats.map((c) => (c.id === chat.id ? chat : c)) : [...s.chats, chat];
+          return { ...s, chats, activeChat: autoSelect ? chat : s.activeChat };
         });
         return;
       }
@@ -143,11 +158,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
           createdAt: data.createdAt,
         };
 
-        setState((s) => ({
-          ...s,
-          messages: [...s.messages, m],
-          chats: s.chats.map((c) => (c.id === m.chatId ? { ...c, lastMessage: m } : c)),
-        }));
+        setState((s) => {
+          const exists = s.messages.some((msg) => msg.id === m.id);
+          if (exists) return s;
+
+          return {
+            ...s,
+            messages: [...s.messages, m],
+            chats: s.chats.map((c) => (c.id === m.chatId ? { ...c, lastMessage: m } : c)),
+          };
+        });
         return;
       }
 
@@ -162,8 +182,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      if (type === "auth:error" || type === "error") {
-        console.log("[WS ERROR]", data?.message || data);
+      if (AUTH_EVENT_TYPES.has(type)) {
+        const message = data?.message || "Error de autenticación";
+
+        if (message === "Token inválido") {
+          localStorage.removeItem("token");
+          setState((s) => ({
+            ...s,
+            user: null,
+            chats: [],
+            messages: [],
+            activeChat: null,
+            authReady: true,
+            authError: "Tu sesión expiró, vuelve a iniciar sesión.",
+          }));
+          return;
+        }
+
+        setState((s) => ({ ...s, authError: message, authReady: true }));
         return;
       }
     });
@@ -177,13 +213,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     wsClient.send("chat:list", {});
   }, []);
 
-  // Auth
   const loginWS = useCallback((usernameOrEmail: string, password: string) => {
+    setState((s) => ({ ...s, authError: null }));
     wsClient.send("auth:login", { usernameOrEmail, password });
   }, []);
 
   const registerWS = useCallback(
     (displayName: string, username: string, email: string, password: string) => {
+      setState((s) => ({ ...s, authError: null }));
       wsClient.send("auth:register", {
         displayName,
         username: username.trim().toLowerCase(),
@@ -196,17 +233,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(() => {
     localStorage.removeItem("token");
-    setState((s) => ({ ...s, user: null, activeChat: null, chats: [], messages: [] }));
-    wsClient.connect(); // reconecta sin token
+    setState((s) => ({
+      ...s,
+      user: null,
+      activeChat: null,
+      chats: [],
+      messages: [],
+      authError: null,
+      authReady: true,
+    }));
+    wsClient.close();
+    wsClient.connect();
   }, []);
 
-  // UI
+  const clearAuthError = useCallback(() => {
+    setState((s) => ({ ...s, authError: null }));
+  }, []);
+
   const setActiveChat = useCallback((chat: Chat | null) => {
     setState((s) => ({ ...s, activeChat: chat }));
     if (chat) wsClient.send("room:join", { chatId: chat.id });
   }, []);
 
-  // Chat actions
   const sendMessage = useCallback(
     (chatId: string, content: string, kind: Message["kind"] = "text") => {
       wsClient.send("message:send", { chatId, kind, content });
@@ -228,7 +276,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // 🔥 NUEVO: Buscar usuario por username (promise)
   const findUserByUsername = useCallback((username: string) => {
     return new Promise<User | null>((resolve) => {
       const clean = username.trim().toLowerCase();
@@ -249,7 +296,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  // 🔥 NUEVO: Crear chat directo por username
   const createDirectChatByUsername = useCallback(
     async (username: string) => {
       const u = await findUserByUsername(username);
@@ -260,7 +306,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [findUserByUsername]
   );
 
-  // Call UI
   const startCall = useCallback((chatId: string) => {
     setState((s) => ({ ...s, inCall: true, callChatId: chatId }));
   }, []);
@@ -269,7 +314,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setState((s) => ({ ...s, inCall: false, callChatId: null }));
   }, []);
 
-  // Presence
   const updateStatus = useCallback((status: User["status"]) => {
     wsClient.send("presence:update", { status });
     setState((s) => (s.user ? { ...s, user: { ...s.user, status } } : s));
@@ -282,6 +326,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         loginWS,
         registerWS,
         logout,
+        clearAuthError,
         setActiveChat,
         sendMessage,
         startCall,
