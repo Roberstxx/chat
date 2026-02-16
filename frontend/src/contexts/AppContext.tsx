@@ -50,6 +50,7 @@ interface AppContextType extends AppState {
   endCall: (notifyPeer?: boolean) => void;
   sendRtcSignal: (signal: Omit<RtcSignal, "fromUserId">) => void;
   onRtcSignal: (handler: (signal: RtcSignal) => void) => () => void;
+  consumePendingIncomingOffer: (chatId: string) => RtcSignal | null;
 
   updateStatus: (status: User["status"]) => void;
 
@@ -97,6 +98,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
 
   const rtcListenersRef = useRef(new Set<(signal: RtcSignal) => void>());
+  const pendingIncomingOfferRef = useRef<RtcSignal | null>(null);
 
   const emitRtcSignal = useCallback((signal: RtcSignal) => {
     rtcListenersRef.current.forEach((handler) => handler(signal));
@@ -207,6 +209,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         emitRtcSignal(signal);
 
         if (signal.type === "offer") {
+          pendingIncomingOfferRef.current = signal;
+
           toast({
             title: signal.mode === "video" ? "Videollamada entrante" : "Llamada entrante",
             description: "Tienes una llamada entrante",
@@ -226,6 +230,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
 
         if (signal.type === "end") {
+          pendingIncomingOfferRef.current = null;
           setState((s) => ({
             ...s,
             inCall: false,
@@ -371,6 +376,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => rtcListenersRef.current.delete(handler);
   }, []);
 
+
+  const consumePendingIncomingOffer = useCallback((chatId: string) => {
+    const pending = pendingIncomingOfferRef.current;
+    if (!pending || pending.chatId != chatId) return null;
+    pendingIncomingOfferRef.current = null;
+    return pending;
+  }, []);
+
   const startCall = useCallback((chatId: string, mode: CallMode = "audio") => {
     setState((s) => ({ ...s, inCall: true, callChatId: chatId, callMode: mode, callInitiator: true }));
   }, []);
@@ -403,6 +416,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         endCall,
         sendRtcSignal,
         onRtcSignal,
+        consumePendingIncomingOffer,
         createGroup,
         createDirectChat,
         inviteToGroup,

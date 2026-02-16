@@ -12,7 +12,7 @@ const RTC_CONFIG: RTCConfiguration = {
 };
 
 export default function CallOverlay() {
-  const { inCall, endCall, callChatId, callMode, callInitiator, chats, user, sendRtcSignal, onRtcSignal } = useApp();
+  const { inCall, endCall, callChatId, callMode, callInitiator, chats, user, sendRtcSignal, onRtcSignal, consumePendingIncomingOffer } = useApp();
 
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
@@ -20,6 +20,7 @@ export default function CallOverlay() {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [incomingOffer, setIncomingOffer] = useState<RtcSignal | null>(null);
+  const incomingOfferRef = useRef<RtcSignal | null>(null);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -45,13 +46,16 @@ export default function CallOverlay() {
   }, [remoteStream]);
 
   useEffect(() => {
+    incomingOfferRef.current = incomingOffer;
+  }, [incomingOffer]);
+
+  useEffect(() => {
     if (!inCall || !callChat || !peer || !user) return;
 
     endedRef.current = false;
 
     const stopMedia = () => {
       setRemoteStream(null);
-      setIncomingOffer(null);
       setLocalStream((prev) => {
         prev?.getTracks().forEach((t) => t.stop());
         return null;
@@ -102,7 +106,7 @@ export default function CallOverlay() {
     const setupLocalMedia = async (videoEnabled: boolean) => {
       if (localStreamRef.current) return localStreamRef.current;
 
-      const insecureContext = typeof window !== 'undefined' && !window.isSecureContext && window.location.hostname !== 'localhost';
+      const insecureContext = typeof window !== 'undefined' && !window.isSecureContext && !['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
       if (insecureContext) {
         toast({
           title: 'Tu navegador bloquea permisos en HTTP',
@@ -213,11 +217,12 @@ export default function CallOverlay() {
     };
 
     const rejectIncoming = () => {
-      if (incomingOffer) {
+      const pending = incomingOfferRef.current;
+      if (pending) {
         sendRtcSignal({
           type: 'end',
           chatId: callChat.id,
-          toUserId: incomingOffer.fromUserId,
+          toUserId: pending.fromUserId,
         });
       }
       safeEndLocal(false);
@@ -266,6 +271,10 @@ export default function CallOverlay() {
     if (callInitiator) {
       void createOutgoingOffer();
     } else {
+      const pending = consumePendingIncomingOffer(callChat.id);
+      if (pending) {
+        setIncomingOffer(pending);
+      }
       setStatus('Llamada entrante...');
     }
 
@@ -276,10 +285,12 @@ export default function CallOverlay() {
       unsub();
       closePeer();
       stopMedia();
+      setIncomingOffer(null);
+      incomingOfferRef.current = null;
       acceptIncomingRef.current = null;
       rejectIncomingRef.current = null;
     };
-  }, [inCall, callChat, peer, user, callMode, callInitiator, onRtcSignal, sendRtcSignal, endCall, incomingOffer]);
+  }, [inCall, callChat, peer, user, callMode, callInitiator, onRtcSignal, sendRtcSignal, endCall, consumePendingIncomingOffer]);
 
   if (!inCall || !callChat) return null;
 
