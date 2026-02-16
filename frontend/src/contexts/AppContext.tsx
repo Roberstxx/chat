@@ -125,7 +125,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
 
       if (type === "hello:ok") {
-        setState((s) => ({ ...s, authReady: true, authError: null }));
+        setState((s) => ({
+          ...s,
+          authReady: true,
+          authError: null,
+          user: data?.user ? mapBackendUser(data.user) : s.user,
+        }));
         wsClient.send("chat:list", {});
         return;
       }

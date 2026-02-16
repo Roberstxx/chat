@@ -121,7 +121,8 @@ async def handle_hello(ws, data):
     bind_session(ws, user_id)
     db.set_user_status(user_id, "online")
 
-    await send(ws, "hello:ok", {"userId": user_id})
+    user_public = db.get_user_public_by_id(user_id)
+    await send(ws, "hello:ok", {"userId": user_id, "user": user_public})
     await broadcast_presence(user_id, "online")
 
 

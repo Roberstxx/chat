@@ -98,6 +98,14 @@ export default function CallOverlay() {
     const setupLocalMedia = async (videoEnabled: boolean) => {
       if (localStreamRef.current) return localStreamRef.current;
 
+      const insecureContext = typeof window !== 'undefined' && !window.isSecureContext && window.location.hostname !== 'localhost';
+      if (insecureContext) {
+        toast({
+          title: 'Permisos bloqueados por el navegador',
+          description: 'Para cámara/micrófono en red local usa HTTPS o localhost.',
+        });
+      }
+
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: true,
@@ -112,20 +120,38 @@ export default function CallOverlay() {
         stream.getTracks().forEach((track) => pc.addTrack(track, stream));
         return stream;
       } catch (error) {
-        if (videoEnabled) {
+        const err = error as DOMException;
+
+        if (err?.name === 'NotAllowedError') {
           toast({
-            title: 'Cámara no disponible',
-            description: 'Se iniciará la llamada solo con audio.',
+            title: 'Permiso de micrófono/cámara denegado',
+            description: 'Haz clic en el candado del navegador y permite cámara/micrófono para esta web.',
           });
-          const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-          localStreamRef.current = audioStream;
-          setLocalStream(audioStream);
-          setMicOn(true);
-          setCamOn(false);
-          const pc = ensurePeerConnection();
-          audioStream.getTracks().forEach((track) => pc.addTrack(track, audioStream));
-          return audioStream;
         }
+
+        if (videoEnabled) {
+          try {
+            const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            toast({
+              title: 'Cámara no disponible',
+              description: 'Se iniciará la llamada solo con audio.',
+            });
+            localStreamRef.current = audioStream;
+            setLocalStream(audioStream);
+            setMicOn(true);
+            setCamOn(false);
+            const pc = ensurePeerConnection();
+            audioStream.getTracks().forEach((track) => pc.addTrack(track, audioStream));
+            return audioStream;
+          } catch {
+            toast({
+              title: 'No se pudo acceder al micrófono',
+              description: 'Revisa permisos del navegador e intenta otra vez.',
+            });
+            throw error;
+          }
+        }
+
         throw error;
       }
     };
