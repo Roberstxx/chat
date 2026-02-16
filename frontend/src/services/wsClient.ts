@@ -2,6 +2,46 @@
 export type WSMessage = { type: string; data: any };
 type Handler = (msg: WSMessage) => void;
 
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+
+function isLocalHost(hostname: string) {
+  return LOCAL_HOSTS.has(hostname);
+}
+
+function resolveWsUrl(configured: string): string {
+  if (typeof window === "undefined") {
+    return configured || "ws://localhost:8765";
+  }
+
+  const pageProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const pageHost = window.location.hostname;
+
+  if (!configured) {
+    return `${pageProtocol}//${pageHost}:8765`;
+  }
+
+  try {
+    const parsed = new URL(configured);
+    const configuredHost = parsed.hostname;
+    const pageIsLocal = isLocalHost(pageHost);
+    const configuredIsLocal = isLocalHost(configuredHost);
+
+    // Evita romper cuando el frontend se abre con otro host (127/LAN/local)
+    // que el configurado en .env (muy común con mkcert y pruebas en móvil).
+    const shouldUsePageHost =
+      pageHost !== configuredHost &&
+      (pageIsLocal !== configuredIsLocal || pageIsLocal || configuredIsLocal);
+
+    const finalHost = shouldUsePageHost ? pageHost : configuredHost;
+    const finalProtocol = pageProtocol;
+    const finalPort = parsed.port || "8765";
+
+    return `${finalProtocol}//${finalHost}:${finalPort}`;
+  } catch {
+    return `${pageProtocol}//${pageHost}:8765`;
+  }
+}
+
 class WSClient {
   private ws: WebSocket | null = null;
   private handlers = new Set<Handler>();
@@ -14,30 +54,8 @@ class WSClient {
   private manualClose = false;
 
   connect(token?: string) {
-    const fallbackHost = typeof window !== "undefined" ? window.location.hostname : "localhost";
     const configured = (import.meta.env.VITE_WS_URL as string) || "";
-
-    let resolvedUrl = configured || `ws://${fallbackHost}:8765`;
-
-    // Si está configurado localhost pero abrimos desde LAN/móvil, fuerza host actual.
-    if (configured && typeof window !== "undefined") {
-      try {
-        const parsed = new URL(configured);
-        const currentHost = window.location.hostname;
-        const isCurrentLocal = currentHost === "localhost" || currentHost === "127.0.0.1";
-        const isConfiguredLocal = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
-
-        if (!isCurrentLocal && isConfiguredLocal) {
-          const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-          const port = parsed.port || "8765";
-          resolvedUrl = `${protocol}//${currentHost}:${port}`;
-        }
-      } catch {
-        resolvedUrl = `ws://${fallbackHost}:8765`;
-      }
-    }
-
-    this.url = resolvedUrl;
+    this.url = resolveWsUrl(configured);
     this.helloToken = token;
     this.manualClose = false;
 
