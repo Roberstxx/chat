@@ -1,5 +1,4 @@
 import os
-import ssl
 import asyncio
 from typing import Any, Dict, Optional, Set
 
@@ -15,15 +14,6 @@ load_dotenv()
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8765"))
 LOG_WS_DISCONNECTS = os.getenv("LOG_WS_DISCONNECTS", "0") == "1"
-
-# SSL / WSS (mkcert)
-SSL_CERT = os.getenv("SSL_CERT", "").strip()
-SSL_KEY = os.getenv("SSL_KEY", "").strip()
-
-ssl_context = None
-if SSL_CERT and SSL_KEY:
-    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    ssl_context.load_cert_chain(SSL_CERT, SSL_KEY)
 
 # --- sesiones ---
 ws_to_user: Dict[websockets.WebSocketServerProtocol, str] = {}
@@ -73,6 +63,8 @@ async def broadcast_to_chat(chat_id: str, type_: str, data: dict):
                 pass
 
 
+
+
 async def send_to_user(user_id: str, type_: str, data: dict):
     msg = protocol.make(type_, data)
     for w in list(user_to_ws.get(user_id, set())):
@@ -92,7 +84,6 @@ async def broadcast_to_chat_members(chat_id: str, type_: str, data: dict, exclud
                 await w.send(msg)
             except:
                 pass
-
 
 def bind_session(ws, user_id: str):
     ws_to_user[ws] = user_id
@@ -379,7 +370,7 @@ async def router(ws, msg: dict):
     if t == "room:join":
         return await handle_room_join(ws, user_id, d)
 
-    # messages / presence / rtc
+    # messages
     if t == "message:send":
         return await handle_message_send(ws, user_id, d)
     if t == "presence:update":
@@ -397,11 +388,7 @@ async def handler(ws):
                 msg = protocol.parse(raw)
             except Exception as e:
                 # Si el cliente ya cerró conexión, evita intentar enviarle errores
-                try:
-                    closed = ws.closed
-                except:
-                    closed = False
-                if not closed:
+                if not ws.closed:
                     await send(ws, "error", {"message": str(e)})
                 continue
             await router(ws, msg)
@@ -429,11 +416,9 @@ async def handler(ws):
 
 
 async def main():
-    scheme = "wss" if ssl_context else "ws"
-    print(f"WS server: {scheme}://{HOST}:{PORT}")
-
+    print(f"WS server: ws://{HOST}:{PORT}")
     try:
-        async with websockets.serve(handler, HOST, PORT, ssl=ssl_context):
+        async with websockets.serve(handler, HOST, PORT):
             await asyncio.Future()  # run forever
     except asyncio.CancelledError:
         # salida limpia al detener el proceso
@@ -445,4 +430,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("WS server detenido")
-

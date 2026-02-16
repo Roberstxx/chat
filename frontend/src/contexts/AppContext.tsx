@@ -39,7 +39,7 @@ interface AppContextType extends AppState {
   setActiveChat: (chat: Chat | null) => void;
 
   sendMessage: (chatId: string, content: string, kind?: Message["kind"]) => void;
-  createGroup: (title: string, description?: string) => void;
+  createGroup: (title: string, description?: string) => Promise<Chat | null>;
   createDirectChat: (targetUserId: string) => void;
   inviteToGroup: (groupId: string, userIds: string[]) => void;
 
@@ -324,7 +324,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   const createGroup = useCallback((title: string, description?: string) => {
-    wsClient.send("group:create", { title, description });
+    return new Promise<Chat | null>((resolve) => {
+      const off = wsClient.on((msg) => {
+        if (msg.type === "group:created") {
+          off?.();
+          resolve(mapBackendChat(msg.data.chat));
+        }
+        if (msg.type === "error") {
+          off?.();
+          resolve(null);
+        }
+      });
+
+      wsClient.send("group:create", { title, description });
+    });
   }, []);
 
   const createDirectChat = useCallback((targetUserId: string) => {
