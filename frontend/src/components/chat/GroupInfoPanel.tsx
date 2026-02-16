@@ -10,7 +10,7 @@ interface GroupInfoPanelProps {
 }
 
 export default function GroupInfoPanel({ open, onClose }: GroupInfoPanelProps) {
-  const { activeChat, allUsers, user, inviteToGroup } = useApp();
+  const { activeChat, chats, user, inviteToGroup } = useApp();
   const [tab, setTab] = useState<'members' | 'invite'>('members');
   const [copied, setCopied] = useState(false);
   const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
@@ -23,7 +23,15 @@ export default function GroupInfoPanel({ open, onClose }: GroupInfoPanelProps) {
   if (!open || !activeChat) return null;
 
   const memberIds = new Set(activeChat.members.map((m) => m.id));
-  const availableUsers = allUsers.filter((u) => !memberIds.has(u.id));
+  const directContacts = chats
+    .filter((chat) => chat.type === 'direct')
+    .map((chat) => chat.members.find((member) => member.id !== user?.id))
+    .filter((member): member is User => Boolean(member));
+
+  const availableUsers = directContacts.filter((contact, idx, all) => {
+    if (memberIds.has(contact.id)) return false;
+    return all.findIndex((candidate) => candidate.id === contact.id) === idx;
+  });
 
   const handleCopy = () => {
     navigator.clipboard.writeText(inviteCode);
