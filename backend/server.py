@@ -13,6 +13,7 @@ load_dotenv()
 
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8765"))
+LOG_WS_DISCONNECTS = os.getenv("LOG_WS_DISCONNECTS", "0") == "1"
 
 # --- sesiones ---
 ws_to_user: Dict[websockets.WebSocketServerProtocol, str] = {}
@@ -395,8 +396,9 @@ async def handler(ws):
         # cierre normal del cliente
         pass
     except (websockets.exceptions.ConnectionClosedError, ConnectionResetError) as e:
-        # en Windows/LAN es común ver WinError 64 cuando cliente pierde red
-        print(f"[WS] conexión cerrada abruptamente: {e}")
+        # En redes móviles/LAN estos cierres abruptos son habituales.
+        if LOG_WS_DISCONNECTS:
+            print(f"[WS] conexión cerrada abruptamente: {e}")
     finally:
         # cleanup
         uid = ws_to_user.pop(ws, None)
@@ -415,9 +417,16 @@ async def handler(ws):
 
 async def main():
     print(f"WS server: ws://{HOST}:{PORT}")
-    async with websockets.serve(handler, HOST, PORT):
-        await asyncio.Future()  # run forever
+    try:
+        async with websockets.serve(handler, HOST, PORT):
+            await asyncio.Future()  # run forever
+    except asyncio.CancelledError:
+        # salida limpia al detener el proceso
+        pass
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("WS server detenido")
