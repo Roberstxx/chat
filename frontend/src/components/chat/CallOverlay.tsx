@@ -29,6 +29,8 @@ export default function CallOverlay() {
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
+  const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
   const endedRef = useRef(false);
   const acceptIncomingRef = useRef<((signal: RtcSignal) => Promise<void>) | null>(null);
   const rejectIncomingRef = useRef<(() => void) | null>(null);
@@ -63,13 +65,14 @@ export default function CallOverlay() {
     const watchVolume = (
       stream: MediaStream | null,
       setSpeaking: (active: boolean) => void,
+      trackEnabled?: () => boolean,
     ) => {
       if (!stream) {
         setSpeaking(false);
         return () => undefined;
       }
 
-      const audioTrack = stream.getAudioTracks().find((track) => track.enabled);
+      const audioTrack = stream.getAudioTracks()[0];
       if (!audioTrack) {
         setSpeaking(false);
         return () => undefined;
@@ -82,13 +85,29 @@ export default function CallOverlay() {
       const source = ctx.createMediaStreamSource(new MediaStream([audioTrack]));
       source.connect(analyser);
 
-      const data = new Uint8Array(analyser.frequencyBinCount);
+      const data = new Uint8Array(analyser.fftSize);
       let rafId = 0;
+      let activeUntil = 0;
 
       const measure = () => {
-        analyser.getByteFrequencyData(data);
-        const avg = data.reduce((sum, v) => sum + v, 0) / data.length;
-        setSpeaking(avg > 18);
+        analyser.getByteTimeDomainData(data);
+
+        const allowDetection = trackEnabled ? trackEnabled() : true;
+        if (!allowDetection) {
+          setSpeaking(false);
+          rafId = requestAnimationFrame(measure);
+          return;
+        }
+
+        let sumSquares = 0;
+        for (const value of data) {
+          const normalized = value / 128 - 1;
+          sumSquares += normalized * normalized;
+        }
+        const rms = Math.sqrt(sumSquares / data.length);
+        const now = performance.now();
+        if (rms > 0.02) activeUntil = now + 220;
+        setSpeaking(now < activeUntil);
         rafId = requestAnimationFrame(measure);
       };
 
@@ -103,7 +122,10 @@ export default function CallOverlay() {
       };
     };
 
-    const stopLocal = watchVolume(localStream, setLocalSpeaking);
+    const stopLocal = watchVolume(localStream, setLocalSpeaking, () => {
+      const track = localStream?.getAudioTracks()[0];
+      return Boolean(track?.enabled);
+    });
     const stopRemote = watchVolume(remoteStream, setRemoteSpeaking);
 
     return () => {
@@ -123,6 +145,8 @@ export default function CallOverlay() {
 
     const stopMedia = () => {
       setRemoteStream(null);
+      remoteStreamRef.current = null;
+      pendingIceRef.current = [];
       setLocalStream((prev) => {
         prev?.getTracks().forEach((t) => t.stop());
         return null;
@@ -162,7 +186,18 @@ export default function CallOverlay() {
         }
       };
       pc.ontrack = (event) => {
-        setRemoteStream(event.streams[0]);
+        const [incoming] = event.streams;
+
+        if (incoming) {
+          remoteStreamRef.current = incoming;
+          setRemoteStream(new MediaStream(incoming.getTracks()));
+        } else {
+          if (!remoteStreamRef.current) remoteStreamRef.current = new MediaStream();
+          const exists = remoteStreamRef.current.getTracks().some((track) => track.id === event.track.id);
+          if (!exists) remoteStreamRef.current.addTrack(event.track);
+          setRemoteStream(new MediaStream(remoteStreamRef.current.getTracks()));
+        }
+
         setStatus('En llamada');
       };
 
@@ -240,6 +275,22 @@ export default function CallOverlay() {
       }
     };
 
+    const flushPendingIce = async (pc: RTCPeerConnection) => {
+      if (!pc.remoteDescription) return;
+      if (!pendingIceRef.current.length) return;
+
+      const queued = [...pendingIceRef.current];
+      pendingIceRef.current = [];
+
+      for (const candidate of queued) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch {
+          // ignore late/outdated candidates
+        }
+      }
+    };
+
     const createOutgoingOffer = async () => {
       try {
         const pc = ensurePeerConnection();
@@ -274,6 +325,7 @@ export default function CallOverlay() {
         if (pc.signalingState === 'closed') return;
 
         await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
+        await flushPendingIce(pc);
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
 
@@ -325,10 +377,16 @@ export default function CallOverlay() {
 
         if (signal.type === 'answer' && signal.payload && pc.signalingState !== 'closed') {
           await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
+          await flushPendingIce(pc);
           setStatus('En llamada');
         }
 
         if (signal.type === 'ice' && signal.payload && pc.signalingState !== 'closed') {
+          if (!pc.remoteDescription) {
+            pendingIceRef.current.push(signal.payload);
+            return;
+          }
+
           try {
             await pc.addIceCandidate(new RTCIceCandidate(signal.payload));
           } catch {
