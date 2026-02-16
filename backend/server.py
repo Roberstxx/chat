@@ -13,10 +13,11 @@ load_dotenv()
 
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8765"))
+LOG_WS_DISCONNECTS = os.getenv("LOG_WS_DISCONNECTS", "0") == "1"
 
 # --- sesiones ---
 ws_to_user: Dict[websockets.WebSocketServerProtocol, str] = {}
-user_to_ws: Dict[str, websockets.WebSocketServerProtocol] = {}
+user_to_ws: Dict[str, Set[websockets.WebSocketServerProtocol]] = {}
 
 # rooms por chatId (opcional, pero útil)
 rooms: Dict[str, Set[websockets.WebSocketServerProtocol]] = {}
@@ -55,8 +56,44 @@ async def broadcast_to_chat(chat_id: str, type_: str, data: dict):
     member_ids = db.list_user_ids_for_chat(chat_id)
     msg = protocol.make(type_, data)
     for uid in member_ids:
-        w = user_to_ws.get(uid)
-        if w:
+        for w in list(user_to_ws.get(uid, set())):
+            try:
+                await w.send(msg)
+            except:
+                pass
+
+
+
+
+async def send_to_user(user_id: str, type_: str, data: dict):
+    msg = protocol.make(type_, data)
+    for w in list(user_to_ws.get(user_id, set())):
+        try:
+            await w.send(msg)
+        except:
+            pass
+
+
+async def broadcast_to_chat_members(chat_id: str, type_: str, data: dict, exclude_user_id: str | None = None):
+    msg = protocol.make(type_, data)
+    for uid in db.list_user_ids_for_chat(chat_id):
+        if exclude_user_id and uid == exclude_user_id:
+            continue
+        for w in list(user_to_ws.get(uid, set())):
+            try:
+                await w.send(msg)
+            except:
+                pass
+
+def bind_session(ws, user_id: str):
+    ws_to_user[ws] = user_id
+    user_to_ws.setdefault(user_id, set()).add(ws)
+
+
+async def broadcast_presence(user_id: str, status: str):
+    msg = protocol.make("presence:update", {"userId": user_id, "status": status})
+    for uid in db.list_related_user_ids(user_id):
+        for w in list(user_to_ws.get(uid, set())):
             try:
                 await w.send(msg)
             except:
@@ -82,13 +119,12 @@ async def handle_hello(ws, data):
         return
 
     # guardar sesión
-    ws_to_user[ws] = user_id
-    user_to_ws[user_id] = ws
+    bind_session(ws, user_id)
     db.set_user_status(user_id, "online")
 
-    await send(ws, "hello:ok", {"userId": user_id})
-    # opcional: manda presencia
-    await send(ws, "presence:update", {"userId": user_id, "status": "online"})
+    user_public = db.get_user_public_by_id(user_id)
+    await send(ws, "hello:ok", {"userId": user_id, "user": user_public})
+    await broadcast_presence(user_id, "online")
 
 
 async def handle_auth_register(ws, data):
@@ -113,8 +149,7 @@ async def handle_auth_register(ws, data):
     u = db.create_user(username=username, displayName=displayName, email=email or None, password_hash=password_hash)
 
     token = auth.create_token(u["id"], u["username"])
-    ws_to_user[ws] = u["id"]
-    user_to_ws[u["id"]] = ws
+    bind_session(ws, u["id"])
     db.set_user_status(u["id"], "online")
 
     await send(ws, "auth:ok", {"token": token, "user": sanitize_user({**u, "status": "online"})})
@@ -144,8 +179,7 @@ async def handle_auth_login(ws, data):
         return
 
     token = auth.create_token(u["id"], u["username"])
-    ws_to_user[ws] = u["id"]
-    user_to_ws[u["id"]] = ws
+    bind_session(ws, u["id"])
     db.set_user_status(u["id"], "online")
 
     await send(ws, "auth:ok", {"token": token, "user": sanitize_user({**u, "status": "online"})})
@@ -176,11 +210,14 @@ async def handle_chat_create_direct(ws, user_id, data):
     if not target_id:
         await send(ws, "error", {"message": "Falta userId"})
         return
+    if target_id == user_id:
+        await send(ws, "error", {"message": "No puedes crear chat contigo mismo"})
+        return
 
     # existe?
     existing = db.find_direct_chat_between(user_id, target_id)
     if existing:
-        await send(ws, "chat:created", {"chat": existing})
+        await send(ws, "chat:created", {"chat": existing, "autoSelect": True})
         return
 
     target = db.get_user_public_by_id(target_id)
@@ -188,8 +225,12 @@ async def handle_chat_create_direct(ws, user_id, data):
         await send(ws, "error", {"message": "Usuario destino no existe"})
         return
 
-    chat = db.create_direct_chat(user_id, target_id, title=target["displayName"] or target["username"])
-    await send(ws, "chat:created", {"chat": chat})
+    chat = db.create_direct_chat(user_id, target_id)
+    await send(ws, "chat:created", {"chat": chat, "autoSelect": True})
+
+    target_view = db.get_chat_for_user(chat["id"], target_id)
+    if target_view:
+        await send_to_user(target_id, "chat:created", {"chat": target_view, "autoSelect": False})
 
 
 async def handle_group_create(ws, user_id, data):
@@ -227,6 +268,53 @@ async def handle_room_join(ws, user_id, data):
         return
     rooms.setdefault(chat_id, set()).add(ws)
     await send(ws, "room:join:ok", {"chatId": chat_id})
+    messages = db.list_messages(chat_id)
+    await send(ws, "message:list:ok", {"chatId": chat_id, "messages": messages})
+
+
+async def handle_presence_update(ws, user_id, data):
+    status = (data or {}).get("status", "").strip().lower()
+    if status not in {"online", "offline", "busy"}:
+        await send(ws, "error", {"message": "Estado inválido"})
+        return
+    db.set_user_status(user_id, status)
+    await broadcast_presence(user_id, status)
+
+
+async def handle_rtc_signal(ws, user_id, data):
+    signal_type = (data or {}).get("type")
+    chat_id = (data or {}).get("chatId")
+    to_user_id = (data or {}).get("toUserId")
+    payload = (data or {}).get("payload")
+    mode = (data or {}).get("mode")
+
+    if signal_type not in {"offer", "answer", "ice", "end"}:
+        await send(ws, "error", {"message": "Señal RTC inválida"})
+        return
+    if not chat_id:
+        await send(ws, "error", {"message": "Falta chatId"})
+        return
+    if not db.user_is_member(chat_id, user_id):
+        await send(ws, "error", {"message": "No eres miembro de ese chat"})
+        return
+
+    out = {
+        "type": signal_type,
+        "chatId": chat_id,
+        "fromUserId": user_id,
+        "toUserId": to_user_id,
+        "payload": payload,
+        "mode": mode,
+    }
+
+    if to_user_id:
+        if not db.user_is_member(chat_id, to_user_id):
+            await send(ws, "error", {"message": "Destino RTC inválido"})
+            return
+        await send_to_user(to_user_id, "rtc:signal", out)
+        return
+
+    await broadcast_to_chat_members(chat_id, "rtc:signal", out, exclude_user_id=user_id)
 
 
 async def handle_message_send(ws, user_id, data):
@@ -285,6 +373,10 @@ async def router(ws, msg: dict):
     # messages
     if t == "message:send":
         return await handle_message_send(ws, user_id, d)
+    if t == "presence:update":
+        return await handle_presence_update(ws, user_id, d)
+    if t == "rtc:signal":
+        return await handle_rtc_signal(ws, user_id, d)
 
     await send(ws, "error", {"message": f"Evento no soportado: {t}"})
 
@@ -295,16 +387,29 @@ async def handler(ws):
             try:
                 msg = protocol.parse(raw)
             except Exception as e:
-                await send(ws, "error", {"message": str(e)})
+                # Si el cliente ya cerró conexión, evita intentar enviarle errores
+                if not ws.closed:
+                    await send(ws, "error", {"message": str(e)})
                 continue
             await router(ws, msg)
+    except websockets.exceptions.ConnectionClosedOK:
+        # cierre normal del cliente
+        pass
+    except (websockets.exceptions.ConnectionClosedError, ConnectionResetError) as e:
+        # En redes móviles/LAN estos cierres abruptos son habituales.
+        if LOG_WS_DISCONNECTS:
+            print(f"[WS] conexión cerrada abruptamente: {e}")
     finally:
         # cleanup
         uid = ws_to_user.pop(ws, None)
         if uid:
-            if user_to_ws.get(uid) is ws:
-                user_to_ws.pop(uid, None)
-            db.set_user_status(uid, "offline")
+            sockets = user_to_ws.get(uid)
+            if sockets:
+                sockets.discard(ws)
+                if not sockets:
+                    user_to_ws.pop(uid, None)
+                    db.set_user_status(uid, "offline")
+                    await broadcast_presence(uid, "offline")
         # saca de rooms
         for s in rooms.values():
             s.discard(ws)
@@ -312,9 +417,16 @@ async def handler(ws):
 
 async def main():
     print(f"WS server: ws://{HOST}:{PORT}")
-    async with websockets.serve(handler, HOST, PORT):
-        await asyncio.Future()  # run forever
+    try:
+        async with websockets.serve(handler, HOST, PORT):
+            await asyncio.Future()  # run forever
+    except asyncio.CancelledError:
+        # salida limpia al detener el proceso
+        pass
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("WS server detenido")
