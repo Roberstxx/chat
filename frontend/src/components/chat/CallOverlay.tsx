@@ -2,6 +2,7 @@ import { useApp } from '@/contexts/AppContext';
 import { Mic, MicOff, Video, VideoOff, PhoneOff, Monitor } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { RtcSignal } from '@/types';
+import { toast } from '@/components/ui/use-toast';
 
 const RTC_CONFIG: RTCConfiguration = {
   iceServers: [
@@ -11,17 +12,7 @@ const RTC_CONFIG: RTCConfiguration = {
 };
 
 export default function CallOverlay() {
-  const {
-    inCall,
-    endCall,
-    callChatId,
-    callMode,
-    callInitiator,
-    chats,
-    user,
-    sendRtcSignal,
-    onRtcSignal,
-  } = useApp();
+  const { inCall, endCall, callChatId, callMode, callInitiator, chats, user, sendRtcSignal, onRtcSignal } = useApp();
 
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
@@ -30,8 +21,10 @@ export default function CallOverlay() {
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const endedRef = useRef(false);
 
   const callChat = useMemo(() => chats.find((c) => c.id === callChatId) ?? null, [chats, callChatId]);
   const peer = useMemo(() => {
@@ -40,22 +33,47 @@ export default function CallOverlay() {
   }, [callChat, user]);
 
   useEffect(() => {
-    if (!localVideoRef.current) return;
-    localVideoRef.current.srcObject = localStream;
+    localStreamRef.current = localStream;
+    if (localVideoRef.current) localVideoRef.current.srcObject = localStream;
   }, [localStream]);
 
   useEffect(() => {
-    if (!remoteVideoRef.current) return;
-    remoteVideoRef.current.srcObject = remoteStream;
+    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStream;
   }, [remoteStream]);
 
   useEffect(() => {
-    if (!inCall || !callChat || !user || !peer) return;
+    if (!inCall || !callChat || !peer || !user) return;
 
-    let active = true;
+    endedRef.current = false;
+
+    const stopMedia = () => {
+      setRemoteStream(null);
+      setLocalStream((prev) => {
+        prev?.getTracks().forEach((t) => t.stop());
+        return null;
+      });
+      localStreamRef.current = null;
+    };
+
+    const closePeer = () => {
+      if (pcRef.current) {
+        pcRef.current.onicecandidate = null;
+        pcRef.current.ontrack = null;
+        pcRef.current.close();
+        pcRef.current = null;
+      }
+    };
+
+    const safeEndLocal = (notifyPeer: boolean) => {
+      if (endedRef.current) return;
+      endedRef.current = true;
+      closePeer();
+      stopMedia();
+      endCall(notifyPeer);
+    };
 
     const ensurePeerConnection = () => {
-      if (pcRef.current) return pcRef.current;
+      if (pcRef.current && pcRef.current.signalingState !== 'closed') return pcRef.current;
 
       const pc = new RTCPeerConnection(RTC_CONFIG);
       pc.onicecandidate = (event) => {
@@ -68,7 +86,6 @@ export default function CallOverlay() {
           });
         }
       };
-
       pc.ontrack = (event) => {
         setRemoteStream(event.streams[0]);
         setStatus('En llamada');
@@ -79,74 +96,107 @@ export default function CallOverlay() {
     };
 
     const setupLocalMedia = async (videoEnabled: boolean) => {
-      if (localStream) return localStream;
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: videoEnabled,
-      });
-      if (!active) {
-        stream.getTracks().forEach((t) => t.stop());
-        return null;
+      if (localStreamRef.current) return localStreamRef.current;
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: videoEnabled,
+        });
+        localStreamRef.current = stream;
+        setLocalStream(stream);
+        setMicOn(true);
+        setCamOn(videoEnabled && stream.getVideoTracks().length > 0);
+
+        const pc = ensurePeerConnection();
+        stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+        return stream;
+      } catch (error) {
+        if (videoEnabled) {
+          toast({
+            title: 'Cámara no disponible',
+            description: 'Se iniciará la llamada solo con audio.',
+          });
+          const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+          localStreamRef.current = audioStream;
+          setLocalStream(audioStream);
+          setMicOn(true);
+          setCamOn(false);
+          const pc = ensurePeerConnection();
+          audioStream.getTracks().forEach((track) => pc.addTrack(track, audioStream));
+          return audioStream;
+        }
+        throw error;
       }
-      setLocalStream(stream);
-      setMicOn(true);
-      setCamOn(videoEnabled);
-      const pc = ensurePeerConnection();
-      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
-      return stream;
     };
 
     const createOutgoingOffer = async () => {
-      const pc = ensurePeerConnection();
-      await setupLocalMedia(callMode === 'video');
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
+      try {
+        const pc = ensurePeerConnection();
+        await setupLocalMedia(callMode === 'video');
 
-      sendRtcSignal({
-        type: 'offer',
-        chatId: callChat.id,
-        toUserId: peer.id,
-        mode: callMode,
-        payload: offer,
-      });
+        if (!pcRef.current || pcRef.current.signalingState === 'closed') return;
 
-      setStatus('Llamando...');
+        const offer = await pc.createOffer();
+        if (!pcRef.current || pcRef.current.signalingState === 'closed') return;
+
+        await pc.setLocalDescription(offer);
+        sendRtcSignal({
+          type: 'offer',
+          chatId: callChat.id,
+          toUserId: peer.id,
+          mode: callMode,
+          payload: offer,
+        });
+        setStatus('Llamando...');
+      } catch (error) {
+        console.error('[RTC] create offer error', error);
+        toast({ title: 'No se pudo iniciar la llamada', description: 'Revisa permisos de micrófono/cámara.' });
+        safeEndLocal(false);
+      }
     };
 
     const handleSignal = async (signal: RtcSignal) => {
-      if (!active || signal.chatId !== callChat.id || signal.fromUserId === user.id) return;
-      const pc = ensurePeerConnection();
-
-      if (signal.type === 'offer') {
-        await setupLocalMedia((signal.mode ?? callMode) === 'video');
-        await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        sendRtcSignal({
-          type: 'answer',
-          chatId: callChat.id,
-          toUserId: signal.fromUserId,
-          payload: answer,
-        });
-        setStatus('Conectando...');
-      }
-
-      if (signal.type === 'answer' && signal.payload) {
-        await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
-        setStatus('En llamada');
-      }
-
-      if (signal.type === 'ice' && signal.payload) {
-        try {
-          await pc.addIceCandidate(new RTCIceCandidate(signal.payload));
-        } catch {
-          // ignore early ICE race conditions
-        }
-      }
+      if (endedRef.current) return;
+      if (signal.chatId !== callChat.id || signal.fromUserId === user.id) return;
 
       if (signal.type === 'end') {
         setStatus('Llamada finalizada');
-        cleanup(false);
+        safeEndLocal(false);
+        return;
+      }
+
+      try {
+        const pc = ensurePeerConnection();
+
+        if (signal.type === 'offer') {
+          await setupLocalMedia((signal.mode ?? callMode) === 'video');
+          await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          sendRtcSignal({
+            type: 'answer',
+            chatId: callChat.id,
+            toUserId: signal.fromUserId,
+            payload: answer,
+          });
+          setStatus('Conectando...');
+        }
+
+        if (signal.type === 'answer' && signal.payload && pc.signalingState !== 'closed') {
+          await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
+          setStatus('En llamada');
+        }
+
+        if (signal.type === 'ice' && signal.payload && pc.signalingState !== 'closed') {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(signal.payload));
+          } catch {
+            // ignore ICE race conditions
+          }
+        }
+      } catch (error) {
+        console.error('[RTC] signal handling error', error);
       }
     };
 
@@ -160,59 +210,24 @@ export default function CallOverlay() {
       setStatus('Llamada entrante...');
     }
 
-    function cleanup(notifyPeer: boolean) {
-      if (!active) return;
-      active = false;
-      unsub();
-
-      if (pcRef.current) {
-        pcRef.current.onicecandidate = null;
-        pcRef.current.ontrack = null;
-        pcRef.current.close();
-        pcRef.current = null;
-      }
-
-      setRemoteStream(null);
-
-      setLocalStream((prev) => {
-        prev?.getTracks().forEach((t) => t.stop());
-        return null;
-      });
-
-      endCall(notifyPeer);
-    }
-
     return () => {
-      if (!active) return;
-      active = false;
       unsub();
-
-      if (pcRef.current) {
-        pcRef.current.onicecandidate = null;
-        pcRef.current.ontrack = null;
-        pcRef.current.close();
-        pcRef.current = null;
-      }
-
-      setRemoteStream(null);
-      setLocalStream((prev) => {
-        prev?.getTracks().forEach((t) => t.stop());
-        return null;
-      });
+      closePeer();
+      stopMedia();
     };
-  }, [inCall, callChat, user, peer, callMode, callInitiator, onRtcSignal, sendRtcSignal, endCall, localStream]);
+  }, [inCall, callChat, peer, user, callMode, callInitiator, onRtcSignal, sendRtcSignal, endCall]);
 
   if (!inCall || !callChat) return null;
 
   const toggleMic = () => {
-    localStream?.getAudioTracks().forEach((t) => {
+    localStreamRef.current?.getAudioTracks().forEach((t) => {
       t.enabled = !micOn;
     });
     setMicOn((v) => !v);
   };
 
   const toggleCam = () => {
-    localStream?.getVideoTracks().forEach((t) => {
+    localStreamRef.current?.getVideoTracks().forEach((t) => {
       t.enabled = !camOn;
     });
     setCamOn((v) => !v);
@@ -226,10 +241,8 @@ export default function CallOverlay() {
     if (sender && videoTrack) {
       await sender.replaceTrack(videoTrack);
       videoTrack.onended = async () => {
-        const camTrack = localStream?.getVideoTracks()?.[0];
-        if (camTrack) {
-          await sender.replaceTrack(camTrack);
-        }
+        const camTrack = localStreamRef.current?.getVideoTracks()?.[0];
+        if (camTrack) await sender.replaceTrack(camTrack);
       };
     }
   };
@@ -248,9 +261,7 @@ export default function CallOverlay() {
           ) : (
             <div className="w-full h-full flex items-center justify-center text-call-foreground text-xl">Audio</div>
           )}
-          <div className="absolute bottom-2 left-2 text-xs text-white/80 bg-black/40 px-2 py-1 rounded">
-            {peer?.displayName || 'Participante'}
-          </div>
+          <div className="absolute bottom-2 left-2 text-xs text-white/80 bg-black/40 px-2 py-1 rounded">Participante</div>
         </div>
 
         <div className="rounded-2xl bg-black/30 border border-white/10 overflow-hidden aspect-video relative">
@@ -259,9 +270,7 @@ export default function CallOverlay() {
           ) : (
             <div className="w-full h-full flex items-center justify-center text-call-foreground text-xl">Tu audio</div>
           )}
-          <div className="absolute bottom-2 left-2 text-xs text-white/80 bg-black/40 px-2 py-1 rounded">
-            Tú
-          </div>
+          <div className="absolute bottom-2 left-2 text-xs text-white/80 bg-black/40 px-2 py-1 rounded">Tú</div>
         </div>
       </div>
 

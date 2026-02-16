@@ -15,8 +15,29 @@ class WSClient {
 
   connect(token?: string) {
     const fallbackHost = typeof window !== "undefined" ? window.location.hostname : "localhost";
-    const url = (import.meta.env.VITE_WS_URL as string) || `ws://${fallbackHost}:8765`;
-    this.url = url;
+    const configured = (import.meta.env.VITE_WS_URL as string) || "";
+
+    let resolvedUrl = configured || `ws://${fallbackHost}:8765`;
+
+    // Si está configurado localhost pero abrimos desde LAN/móvil, fuerza host actual.
+    if (configured && typeof window !== "undefined") {
+      try {
+        const parsed = new URL(configured);
+        const currentHost = window.location.hostname;
+        const isCurrentLocal = currentHost === "localhost" || currentHost === "127.0.0.1";
+        const isConfiguredLocal = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
+
+        if (!isCurrentLocal && isConfiguredLocal) {
+          const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+          const port = parsed.port || "8765";
+          resolvedUrl = `${protocol}//${currentHost}:${port}`;
+        }
+      } catch {
+        resolvedUrl = `ws://${fallbackHost}:8765`;
+      }
+    }
+
+    this.url = resolvedUrl;
     this.helloToken = token;
     this.manualClose = false;
 

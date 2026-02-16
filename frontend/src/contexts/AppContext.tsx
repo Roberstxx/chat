@@ -10,6 +10,7 @@ import React, {
 } from "react";
 import { User, Chat, Message, RtcSignal, CallMode } from "@/types";
 import { wsClient } from "@/services/wsClient";
+import { toast } from "@/components/ui/use-toast";
 
 interface AppState {
   user: User | null;
@@ -201,6 +202,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         emitRtcSignal(signal);
 
         if (signal.type === "offer") {
+          toast({
+            title: signal.mode === "video" ? "Videollamada entrante" : "Llamada entrante",
+            description: "Tienes una llamada entrante",
+          });
+
           setState((s) => {
             const nextActive = s.chats.find((c) => c.id === signal.chatId) ?? s.activeChat;
             return {
