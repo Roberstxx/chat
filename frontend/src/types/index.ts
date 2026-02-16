@@ -24,12 +24,15 @@ export interface Message {
   createdAt: number;
 }
 
+export type CallMode = 'audio' | 'video';
+
 export interface RtcSignal {
-  type: 'offer' | 'answer' | 'ice';
+  type: 'offer' | 'answer' | 'ice' | 'end';
   chatId: string;
   fromUserId: string;
   toUserId?: string;
-  payload: any;
+  mode?: CallMode;
+  payload?: any;
 }
 
 export type WsEvent =

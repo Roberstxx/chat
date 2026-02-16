@@ -8,31 +8,35 @@ class WSClient {
   private isOpen = false;
   private url = "";
   private helloToken?: string;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectDelayMs = 1500;
+  private readonly maxReconnectDelayMs = 10000;
+  private manualClose = false;
 
   connect(token?: string) {
-    const url = (import.meta.env.VITE_WS_URL as string) || "ws://localhost:8765";
+    const fallbackHost = typeof window !== "undefined" ? window.location.hostname : "localhost";
+    const url = (import.meta.env.VITE_WS_URL as string) || `ws://${fallbackHost}:8765`;
     this.url = url;
     this.helloToken = token;
+    this.manualClose = false;
 
-    // Si ya hay uno abierto o conectando, ciérralo bien
-    if (this.ws) {
-      try {
-        this.ws.onopen = null;
-        this.ws.onmessage = null;
-        this.ws.onclose = null;
-        this.ws.onerror = null;
-        this.ws.close();
-      } catch {}
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+      return;
     }
 
+    this.clearReconnectTimer();
+    this.openSocket();
+  }
+
+  private openSocket() {
     this.isOpen = false;
-    this.ws = new WebSocket(url);
+    this.ws = new WebSocket(this.url);
 
     this.ws.onopen = () => {
       this.isOpen = true;
-      console.log("[WS] connected:", url);
+      this.reconnectDelayMs = 1500;
+      console.log("[WS] connected:", this.url);
 
-      // hello para sesión en server
       if (this.helloToken) {
         this.send("hello", { token: this.helloToken });
       }
@@ -49,12 +53,35 @@ class WSClient {
 
     this.ws.onclose = () => {
       this.isOpen = false;
+      this.ws = null;
       console.log("[WS] closed");
+
+      if (!this.manualClose) {
+        this.scheduleReconnect();
+      }
     };
 
     this.ws.onerror = (e) => {
       console.log("[WS] error:", e);
     };
+  }
+
+  private scheduleReconnect() {
+    if (this.reconnectTimer || !this.url) return;
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.openSocket();
+      this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, this.maxReconnectDelayMs);
+    }, this.reconnectDelayMs);
+
+    console.log("[WS] reconnect scheduled in", this.reconnectDelayMs, "ms");
+  }
+
+  private clearReconnectTimer() {
+    if (!this.reconnectTimer) return;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
   }
 
   on(handler: Handler) {
@@ -65,16 +92,13 @@ class WSClient {
   send(type: string, data: any) {
     const payload = JSON.stringify({ type, data });
 
-    // ✅ si ya está abierto, manda normal
-    if (this.ws && this.isOpen) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN && this.isOpen) {
       this.ws.send(payload);
       return;
     }
 
-    // ✅ si existe ws pero aún no abre, “encola” y manda cuando abra
     if (this.ws) {
       const wsRef = this.ws;
-
       const onOpen = () => {
         try {
           if (wsRef.readyState === WebSocket.OPEN) wsRef.send(payload);
@@ -83,12 +107,9 @@ class WSClient {
       };
 
       wsRef.addEventListener("open", onOpen);
-      console.log("[WS] queued until open:", type);
       return;
     }
 
-    // ✅ si no hay ws, intenta reconectar y encolar
-    console.log("[WS] no ws, reconnecting then queue:", type);
     this.connect(this.helloToken);
     const wsRef = this.ws;
     if (wsRef) {
@@ -103,6 +124,9 @@ class WSClient {
   }
 
   close() {
+    this.manualClose = true;
+    this.clearReconnectTimer();
+    this.isOpen = false;
     try {
       this.ws?.close();
     } catch {}
