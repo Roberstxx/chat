@@ -232,7 +232,7 @@ export default function CallOverlay() {
 
     const ensurePeerConnection = (peerId: string) => {
       const existing = pcByPeerRef.current.get(peerId);
-      if (existing && existing.signalingState !== 'closed') return existing;
+      if (existing) return existing;
 
       const pc = new RTCPeerConnection(RTC_CONFIG);
 
@@ -349,11 +349,9 @@ export default function CallOverlay() {
 
     const createOfferForPeer = async (peerId: string) => {
       const pc = await attachLocalTracksToPeer(peerId);
-      if (!pc || pc.signalingState === 'closed') return;
+      if (!pc) return;
 
       const offer = await pc.createOffer();
-      if (pc.signalingState === 'closed') return;
-
       await pc.setLocalDescription(offer);
       sendRtcSignal({
         type: 'offer',
@@ -370,8 +368,6 @@ export default function CallOverlay() {
       await ensureLocalMedia(targetMode);
 
       const pc = await attachLocalTracksToPeer(fromPeerId);
-      if (pc.signalingState === 'closed') return;
-
       if (pc.signalingState === 'have-local-offer') {
         await pc.setLocalDescription({ type: 'rollback' });
       }
