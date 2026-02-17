@@ -1,223 +1,203 @@
-# Chat Local (LAN) --- React + WebSockets (Python) + MySQL + HTTPS/WSS
+# Chat Local (LAN) — Guía principal de uso
 
-## 📌 Descripción General
+Aplicación de chat en tiempo real para red local con:
+- Registro/login de usuarios
+- Chats directos y grupales
+- Mensajería en tiempo real por WebSocket
+- Llamadas de audio/video (WebRTC + señalización por WS)
+- Frontend en HTTPS y backend en WSS para permisos de cámara/micrófono
 
-Sistema de chat tipo WhatsApp/Discord que funciona en red local (LAN):
+---
 
--   🔐 Login y registro con MySQL
--   💬 Chats directos y grupos
--   ⚡ Mensajes en tiempo real por WebSocket
--   🎥 Señalización WebRTC para llamadas
--   🔒 Frontend servido por HTTPS
--   🔐 Backend servido por WSS (SSL)
+## 1) Qué puedes hacer (historias de usuario)
 
-------------------------------------------------------------------------
+- Como usuario, puedo registrarme e iniciar sesión.
+- Como usuario, puedo buscar a otro usuario por username y abrir chat directo.
+- Como usuario, puedo crear grupos e invitar contactos.
+- Como usuario, puedo enviar/recibir mensajes en tiempo real.
+- Como usuario, puedo iniciar llamadas de audio/video (directas y grupales).
+- Como usuario en móvil/tablet, puedo entrar por IP LAN del servidor.
 
-# 🏗 Arquitectura
+---
 
-## Frontend
+## 2) Estructura esperada
 
--   Vite + React + TypeScript
--   React Router
--   Conexión WSS
--   Variables en `frontend/.env`
+```text
+chat/
+  README.md                 <- esta guía
+  backend/
+    README.md               <- guía técnica backend
+    server.py
+    db.py
+    auth.py
+    protocol.py
+    requirements.txt
+    .env                    <- local (no subir)
+  frontend/
+    README.md               <- guía técnica frontend
+    package.json
+    vite.config.ts
+    tsconfig*.json
+    src/
+    .env                    <- local (no subir)
+  certs/
+    local.pem               <- local (no subir)
+    local-key.pem           <- local (no subir)
+```
 
-## Backend
+---
 
--   Python (asyncio)
--   websockets
--   mysql-connector-python
--   bcrypt
--   PyJWT
--   python-dotenv
+## 3) Requisitos (PC servidor)
 
-## Base de Datos
+- Node.js 18+
+- Python 3.11+
+- MySQL (XAMPP o servidor local)
+- mkcert (para certificados LAN)
 
-MySQL con tablas: - users - chats - chat_members - messages
+Verifica:
 
-------------------------------------------------------------------------
+```powershell
+node -v
+npm -v
+python --version
+```
 
-# 📂 Estructura del Proyecto
+---
 
-    chat/
-      backend/
-        .venv/
-        .env
-        requirements.txt
-        server.py
-        db.py
-        auth.py
-        protocol.py
+## 4) Base de datos
 
-      frontend/
-        .env
-        package.json
-        src/
-        dist/
+1. Enciende MySQL.
+2. Crea la BD `chatapp`.
+3. Crea tablas usadas por el backend: `users`, `chats`, `chat_members`, `messages`.
 
-      certs/
-        local.pem
-        local-key.pem
+---
 
-------------------------------------------------------------------------
+## 5) Certificados HTTPS/WSS (obligatorio recomendado)
 
-# 🧰 Requisitos
+> Para WebRTC en red local, usa HTTPS/WSS para evitar bloqueos de cámara/micrófono.
 
-En PC servidor: - Node.js 18+ - Python 3.11+ - MySQL / XAMPP - mkcert
+En PowerShell (admin):
 
-------------------------------------------------------------------------
+```powershell
+choco install mkcert -y
+mkcert -install
+```
 
-# 🗄 Configuración MySQL
+En la raíz del repo (`chat/`), genera cert para tu IP LAN (ejemplo `192.168.1.12`):
 
-1.  Encender Apache y MySQL en XAMPP
-2.  Crear base de datos `chatapp`
-3.  Ejecutar script SQL de tablas
+```powershell
+mkdir certs
+mkcert 192.168.1.12
+move .\192.168.1.12.pem .\certs\local.pem
+move .\192.168.1.12-key.pem .\certs\local-key.pem
+```
 
-------------------------------------------------------------------------
+---
 
-# 🔐 Certificados SSL con mkcert
+## 6) Variables de entorno
 
-## Instalar mkcert
+### `backend/.env`
 
-PowerShell como administrador:
+```env
+MYSQL_DB=chatapp
+MYSQL_USER=root
+MYSQL_PASSWORD=
+MYSQL_HOST=127.0.0.1
+MYSQL_PORT=3306
 
-    choco install mkcert -y
-    mkcert -install
+JWT_SECRET=super_secret_key_123
 
-## Generar certificado
+HOST=0.0.0.0
+PORT=8765
 
-    mkcert 192.168.1.12
-    move 192.168.1.12.pem certs\local.pem
-    move 192.168.1.12-key.pem certs\local-key.pem
+SSL_CERT=../certs/local.pem
+SSL_KEY=../certs/local-key.pem
 
-------------------------------------------------------------------------
+LOG_WS_DISCONNECTS=0
+```
 
-# ⚙ Variables de Entorno
+### `frontend/.env`
 
-## backend/.env
+```env
+VITE_WS_URL=wss://192.168.1.12:8765
+```
 
-    HOST=0.0.0.0
-    PORT=8765
+Cambia la IP por tu IP LAN real.
 
-    MYSQL_DB=chatapp
-    MYSQL_USER=root
-    MYSQL_PASSWORD=
-    MYSQL_HOST=127.0.0.1
-    MYSQL_PORT=3306
+---
 
-    JWT_SECRET=super_secret_key_123
+## 7) Arranque paso a paso (sin errores)
 
-    SSL_CERT=../certs/local.pem
-    SSL_KEY=../certs/local-key.pem
+### Paso A — Backend
 
-## frontend/.env
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+python server.py
+```
 
-    VITE_WS_URL=wss://192.168.1.12:8765
+Debes ver algo como:
 
-------------------------------------------------------------------------
+```text
+WS server: wss://0.0.0.0:8765
+```
 
-# 🚀 Primer Arranque (PC Servidor)
+### Paso B — Frontend build
 
-## Backend
+```powershell
+cd ..\frontend
+npm install
+npm run build
+```
 
-    cd backend
-    python -m venv .venv
-    .\.venv\Scripts\activate
-    pip install -r requirements.txt
-    python server.py
+### Paso C — Servir frontend por HTTPS (SPA)
 
-## Frontend
+Recomendado usar `serve` por fallback de rutas:
 
-    cd frontend
-    npm install
-    npm run build
-    npm install -g http-server
-    http-server dist -S -C ..\certs\local.pem -K ..\certs\local-key.pem -p 8080 -a 0.0.0.0 --proxy http://192.168.1.12:8080?
+```powershell
+npm install -g serve
+serve -s dist -l 8080 --ssl-cert ..\certs\local.pem --ssl-key ..\certs\local-key.pem
+```
 
-Abrir en navegador:
+Acceso:
 
-    https://192.168.1.12:8080
+```text
+https://<SERVER_IP>:8080/#/app
+```
 
-------------------------------------------------------------------------
+---
 
-# 🌐 Acceso desde otra PC en la misma red
+## 8) Probar desde otro dispositivo (móvil/tablet/PC)
 
-Abrir:
+1. Conecta dispositivo a la misma red Wi‑Fi/LAN.
+2. Abre `https://<SERVER_IP>:8080/#/app`.
+3. Acepta certificado local si el navegador lo solicita.
+4. Permite cámara/micrófono cuando se pida.
 
-    https://192.168.1.12:8080
+---
 
-------------------------------------------------------------------------
+## 9) Troubleshooting rápido
 
-# 🔄 Flujo del Sistema
+- **No conecta WS**: revisa `VITE_WS_URL`, backend activo y puerto `8765` abierto.
+- **No entra cámara/micrófono**: usa HTTPS válido para tu IP, revisa permisos del navegador.
+- **Rutas 404**: usa `serve -s dist` y URL con `#/app`.
+- **Otro equipo no abre**: revisa firewall (TCP 8080 y 8765).
 
-1.  Front abre WSS
-2.  auth:login / auth:register
-3.  Backend genera JWT
-4.  hello con token
-5.  chat:list
-6.  message:send
-7.  message:receive (broadcast)
+---
 
-------------------------------------------------------------------------
+## 10) Qué NO subir a Git
 
-# 🛠 Troubleshooting
+No subir:
+- `backend/.venv/`
+- `frontend/node_modules/`
+- `frontend/dist/`
+- `backend/.env`
+- `frontend/.env`
+- `certs/`
 
-## Login no funciona
-
-Verificar que: - Front use WSS - Backend esté en SSL
-
-## 404 en /login
-
-Usar flag proxy en http-server
-
-## Error certificado
-
-Verificar rutas correctas en certs/
-
-## Otros no acceden
-
-Abrir puertos 8080 y 8765 en firewall
-
-------------------------------------------------------------------------
-
-# 📦 Comandos Rápidos
-
-Terminal 1:
-
-    cd backend
-    .\.venv\Scripts\activate
-    python server.py
-
-Terminal 2:
-
-    cd frontend
-    npm run build
-    http-server dist -S -C ..\certs\local.pem -K ..\certs\local-key.pem -p 8080 -a 0.0.0.0 --proxy http://192.168.1.12:8080?
-
-------------------------------------------------------------------------
-
-# 📌 Reglas GitHub
-
--   No subir .env
--   No subir .venv
--   No subir node_modules
--   No subir certs
-
-------------------------------------------------------------------------
-
-# 👨‍💻 Nuevo Integrante
-
-1.  Clonar repo
-2.  Instalar dependencias
-3.  Crear DB
-4.  Generar certificados
-5.  Configurar .env
-6.  Ejecutar backend
-7.  Build frontend
-8.  Servir HTTPS
-9.  Acceder por IP
-
-
-- Backend WS: puerto `8765`.
-- Frontend: puerto `8080`.
-- En móvil, abre la IP local del PC servidor.
+Sí subir:
+- Código fuente
+- `README.md`, `frontend/README.md`, `backend/README.md`
+- `requirements.txt`, `package.json`, `package-lock.json`

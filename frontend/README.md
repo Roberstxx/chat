@@ -1,73 +1,94 @@
-# Welcome to your Lovable project
+# Frontend (React + Vite) — Guía técnica
 
-## Project info
+Este frontend implementa UI de chat en tiempo real y señalización WebRTC sobre WebSocket.
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+## Stack
 
-## How can I edit this code?
+- React 18 + TypeScript
+- Vite 5
+- React Router
+- Tailwind + shadcn/ui
+- Vitest + Testing Library
 
-There are several ways of editing your application.
+## Scripts
 
-**Use Lovable**
-
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
-
-Changes made via Lovable will be committed automatically to this repo.
-
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
-
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
+```bash
+npm install
 npm run dev
+npm run build
+npm run preview
+npm test
 ```
 
-**Edit a file directly in GitHub**
+## Configuración clave
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+### Alias `@`
 
-**Use GitHub Codespaces**
+- Definido en `vite.config.ts` y `vitest.config.ts` hacia `./src`.
+- Debe coincidir con TypeScript:
+  - `tsconfig.json` → `@/* -> src/*`
+  - `tsconfig.app.json` → `@/* -> src/*`
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+### Variables de entorno
 
-## What technologies are used for this project?
+Archivo `frontend/.env`:
 
-This project is built with:
+```env
+VITE_WS_URL=wss://<SERVER_IP>:8765
+```
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+> Si se omite, el cliente intenta resolver WS usando host actual + `:8765`.
 
-## How can I deploy this project?
+## Flujo de red en frontend
 
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
+1. `wsClient.connect(token)` abre WebSocket.
+2. Se envía evento `hello` con JWT para restaurar sesión.
+3. App escucha eventos de dominio (`chat:list:ok`, `message:receive`, `rtc:signal`, etc.).
+4. Para llamadas, `CallOverlay` maneja peers WebRTC y usa WS solo para señalización (`offer/answer/ice/end`).
 
-## Can I connect a custom domain to my Lovable project?
+## Eventos WS usados por frontend
 
-Yes, you can!
+### Auth / sesión
+- `auth:login`
+- `auth:register`
+- `auth:ok`
+- `hello`
+- `hello:ok`
+- `auth:error`
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+### Chats / mensajes
+- `chat:list`
+- `chat:list:ok`
+- `chat:createDirect`
+- `chat:created`
+- `group:create`
+- `group:created`
+- `group:invite`
+- `message:send`
+- `message:receive`
+- `message:list:ok`
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+### Presencia / RTC
+- `presence:update`
+- `rtc:signal` (`offer`, `answer`, `ice`, `end`)
+
+## Llamadas (resumen técnico)
+
+- Modo directo y grupal con múltiples `RTCPeerConnection` por participante.
+- Cola de ICE por peer para carreras de señalización.
+- Intento de recuperación de llamada tras refresh usando `sessionStorage` (`activeCall`).
+- Micrófono inicia silenciado por defecto (`track.enabled = false`).
+
+## Build de producción (LAN)
+
+```bash
+npm run build
+# recomendado servir con fallback SPA y HTTPS
+serve -s dist -l 8080 --ssl-cert ../certs/local.pem --ssl-key ../certs/local-key.pem
+```
+
+## Problemas comunes
+
+- **Error en imports `@/...`**: valida `tsconfig*.json` + `vite.config.ts`.
+- **WS reconectando infinito**: revisa `VITE_WS_URL`, backend WSS y certificado/host.
+- **WebRTC sin cámara/mic**: confirma HTTPS y permisos navegador.
