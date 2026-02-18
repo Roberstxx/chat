@@ -6,6 +6,7 @@ export default function MessageList() {
   const endRef = useRef<HTMLDivElement>(null);
 
   const chatMessages = messages.filter((m) => m.chatId === activeChat?.id);
+  const isGroupChat = activeChat?.type === 'group';
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -26,6 +27,8 @@ export default function MessageList() {
         chatMessages.map((msg) => {
           const isMine = msg.senderId === user?.id;
           const isEmoji = msg.kind === 'emoji';
+          const sender = activeChat.members.find((member) => member.id === msg.senderId);
+          const senderName = isMine ? 'Tú' : sender?.displayName || sender?.username || 'Usuario';
 
           return (
             <div
@@ -43,6 +46,15 @@ export default function MessageList() {
                       }`
                 }`}
               >
+                {isGroupChat && (
+                  <p
+                    className={`mb-1 text-[11px] font-semibold ${
+                      isMine ? 'text-bubble-mine-foreground/70' : 'text-muted-foreground'
+                    }`}
+                  >
+                    {senderName}
+                  </p>
+                )}
                 <p>{msg.content}</p>
                 {!isEmoji && (
                   <p className={`text-[10px] mt-1 ${isMine ? 'text-bubble-mine-foreground/60' : 'text-muted-foreground'}`}>
