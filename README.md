@@ -1,102 +1,80 @@
-# Chat Local (LAN) — Guía principal de uso
+# KaapehChat — Documentación general del proyecto
 
-Aplicación de chat en tiempo real para red local con:
-- Registro/login de usuarios
-- Chats directos y grupales
-- Mensajería en tiempo real por WebSocket
-- Llamadas de audio/video (WebRTC + señalización por WS)
-- Frontend en HTTPS y backend en WSS para permisos de cámara/micrófono
+KaapehChat es una aplicación web de mensajería en tiempo real para redes locales (LAN) y entornos controlados. El proyecto está dividido en dos partes:
 
----
+- **Frontend** (React + Vite): interfaz de usuario, chat, notificaciones y llamadas.
+- **Backend** (Python + WebSocket): autenticación, persistencia en MySQL, presencia y señalización WebRTC.
 
-## 1) Qué puedes hacer (historias de usuario)
-
-- Como usuario, puedo registrarme e iniciar sesión.
-- Como usuario, puedo buscar a otro usuario por username y abrir chat directo.
-- Como usuario, puedo crear grupos e invitar contactos.
-- Como usuario, puedo enviar/recibir mensajes en tiempo real.
-- Como usuario, puedo iniciar llamadas de audio/video (directas y grupales).
-- Como usuario en móvil/tablet, puedo entrar por IP LAN del servidor.
+Este README explica la arquitectura completa y el proceso de instalación/ejecución para que puedas levantar el sistema en cualquier PC sin fricción.
 
 ---
 
-## 2) Estructura esperada
+## 1. Funcionalidades principales
+
+- Registro e inicio de sesión con usuario y contraseña.
+- Chats directos entre dos personas.
+- Chats grupales con creación de grupos e invitaciones.
+- Mensajes en tiempo real.
+- Presencia de usuarios conectados.
+- Llamadas de audio y video usando WebRTC (señalización vía WebSocket).
+
+---
+
+## 2. Estructura del repositorio
 
 ```text
-chat/
-  README.md                 <- esta guía
+KaapehChat_python/
+  README.md                # guía general (este archivo)
   backend/
-    README.md               <- guía técnica backend
+    README.md              # documentación técnica del backend
     server.py
     db.py
     auth.py
     protocol.py
     requirements.txt
-    .env                    <- local (no subir)
   frontend/
-    README.md               <- guía técnica frontend
+    README.md              # documentación técnica del frontend
     package.json
     vite.config.ts
-    tsconfig*.json
     src/
-    .env                    <- local (no subir)
-  certs/
-    local.pem               <- local (no subir)
-    local-key.pem           <- local (no subir)
 ```
 
 ---
 
-## 3) Requisitos (PC servidor)
+## 3. Requisitos del sistema (servidor)
 
-- Node.js 18+
-- Python 3.11+
-- MySQL (XAMPP o servidor local)
-- mkcert (para certificados LAN)
+Instala lo siguiente en la PC donde correrás KaapehChat:
 
-Verifica:
+- **Python 3.11+**
+- **Node.js 18+** (recomendado 20+)
+- **npm 9+**
+- **MySQL 8+** (o MariaDB compatible)
 
-```powershell
+Comandos de verificación:
+
+```bash
+python --version
 node -v
 npm -v
-python --version
 ```
 
 ---
 
-## 4) Base de datos
+## 4. Configuración de la base de datos
 
-1. Enciende MySQL.
-2. Crea la BD `chatapp`.
-3. Crea tablas usadas por el backend: `users`, `chats`, `chat_members`, `messages`.
+1. Inicia tu servidor MySQL.
+2. Crea una base de datos llamada `chatapp`.
+3. Crea las tablas requeridas por el backend (`users`, `chats`, `chat_members`, `messages`).
 
----
-
-## 5) Certificados HTTPS/WSS (obligatorio recomendado)
-
-> Para WebRTC en red local, usa HTTPS/WSS para evitar bloqueos de cámara/micrófono.
-
-En PowerShell (admin):
-
-```powershell
-choco install mkcert -y
-mkcert -install
-```
-
-En la raíz del repo (`chat/`), genera cert para tu IP LAN (ejemplo `192.168.1.12`):
-
-```powershell
-mkdir certs
-mkcert 192.168.1.12
-move .\192.168.1.12.pem .\certs\local.pem
-move .\192.168.1.12-key.pem .\certs\local-key.pem
-```
+> Si ya tienes un script SQL propio, úsalo antes de iniciar el backend.
 
 ---
 
-## 6) Variables de entorno
+## 5. Configuración de entorno
 
-### `backend/.env`
+### 5.1 Backend (`backend/.env`)
+
+Crea el archivo `backend/.env` con este contenido base:
 
 ```env
 MYSQL_DB=chatapp
@@ -110,94 +88,126 @@ JWT_SECRET=super_secret_key_123
 HOST=0.0.0.0
 PORT=8765
 
-SSL_CERT=../certs/local.pem
-SSL_KEY=../certs/local-key.pem
+# Para desarrollo local simple (sin TLS) puedes dejar vacío SSL_CERT/SSL_KEY
+SSL_CERT=
+SSL_KEY=
 
 LOG_WS_DISCONNECTS=0
 ```
 
-### `frontend/.env`
+### 5.2 Frontend (`frontend/.env`)
+
+Crea `frontend/.env`:
 
 ```env
-VITE_WS_URL=wss://192.168.1.12:8765
+VITE_WS_URL=ws://127.0.0.1:8765
 ```
 
-Cambia la IP por tu IP LAN real.
+Si vas a exponerlo por LAN con TLS, cambia a `wss://<IP_SERVIDOR>:8765`.
 
 ---
 
-## 7) Arranque paso a paso (sin errores)
+## 6. Instalación y ejecución (paso a paso)
 
-### Paso A — Backend
+## 6.1 Levantar backend
 
-```powershell
+```bash
 cd backend
 python -m venv .venv
-.\.venv\Scripts\activate
+```
+
+Activación del entorno virtual:
+
+- **Windows (PowerShell):**
+  ```powershell
+  .\.venv\Scripts\Activate.ps1
+  ```
+- **Linux/macOS:**
+  ```bash
+  source .venv/bin/activate
+  ```
+
+Instala dependencias y ejecuta:
+
+```bash
 pip install -r requirements.txt
 python server.py
 ```
 
-Debes ver algo como:
+Salida esperada:
 
 ```text
-WS server: wss://0.0.0.0:8765
+WS server: ws://0.0.0.0:8765
 ```
 
-### Paso B — Frontend build
+(o `wss://...` si usas certificados SSL válidos en variables de entorno).
 
-```powershell
-cd ..\frontend
+## 6.2 Levantar frontend
+
+En otra terminal:
+
+```bash
+cd frontend
 npm install
+npm run dev
+```
+
+Abre en navegador:
+
+```text
+http://localhost:8080
+```
+
+---
+
+## 7. Ejecución en otra PC de la red
+
+Para que otra computadora use KaapehChat:
+
+1. Asegura conectividad en la misma red.
+2. Abre puertos del servidor (por defecto **8080** frontend y **8765** backend).
+3. En `frontend/.env`, define `VITE_WS_URL` con la IP real del servidor.
+4. Reinicia frontend tras cambiar variables de entorno.
+
+Ejemplo:
+
+```env
+VITE_WS_URL=ws://192.168.1.50:8765
+```
+
+---
+
+## 8. Modo producción recomendado
+
+1. Compila frontend:
+
+```bash
+cd frontend
 npm run build
 ```
 
-### Paso C — Servir frontend por HTTPS (SPA)
-
-Recomendado usar `serve` por fallback de rutas:
-
-```powershell
-npm install -g serve
-serve -s dist -l 8080 --ssl-cert ..\certs\local.pem --ssl-key ..\certs\local-key.pem
-```
-
-Acceso:
-
-```text
-https://<SERVER_IP>:8080/#/app
-```
+2. Sirve `frontend/dist` con servidor HTTP/HTTPS (Nginx, Caddy o `serve`).
+3. Ejecuta backend como servicio (systemd, NSSM, PM2 + script Python, etc.).
+4. Usa HTTPS/WSS para evitar problemas de permisos de cámara/micrófono en navegadores.
 
 ---
 
-## 8) Probar desde otro dispositivo (móvil/tablet/PC)
+## 9. Solución de problemas rápida
 
-1. Conecta dispositivo a la misma red Wi‑Fi/LAN.
-2. Abre `https://<SERVER_IP>:8080/#/app`.
-3. Acepta certificado local si el navegador lo solicita.
-4. Permite cámara/micrófono cuando se pida.
-
----
-
-## 9) Troubleshooting rápido
-
-- **No conecta WS**: revisa `VITE_WS_URL`, backend activo y puerto `8765` abierto.
-- **No entra cámara/micrófono**: usa HTTPS válido para tu IP, revisa permisos del navegador.
-- **Rutas 404**: usa `serve -s dist` y URL con `#/app`.
-- **Otro equipo no abre**: revisa firewall (TCP 8080 y 8765).
+- **No conecta al backend:** revisa `VITE_WS_URL`, IP, puerto y firewall.
+- **Error de login/registro:** valida conexión a MySQL y variables `MYSQL_*`.
+- **No aparecen mensajes:** confirma que backend está en ejecución y no hay error de DB.
+- **No funciona video/audio:** usa HTTPS/WSS y concede permisos de micrófono/cámara.
 
 ---
 
-## 10) Qué NO subir a Git
+## 10. Documentación adicional
 
-No subir:
-- `backend/.venv/`
-- `frontend/node_modules/`
-- `frontend/dist/`
-- `backend/.env`
-- `frontend/.env`
-- `certs/`
+- `frontend/README.md`: instalación, arquitectura y flujos del cliente.
+- `backend/README.md`: arquitectura, protocolo WebSocket y operación del servidor.
 
-Sí subir:
-- Código fuente
-- `README.md`, `frontend/README.md`, `backend/README.md`
-- `requirements.txt`, `package.json`, `package-lock.json`
+---
+
+## Autor
+
+**KaapehChat**

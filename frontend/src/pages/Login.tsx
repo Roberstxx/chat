@@ -41,7 +41,7 @@ export default function Login() {
           <div className="w-12 h-12 rounded-2xl bg-primary flex items-center justify-center">
             <MessageCircle className="w-6 h-6 text-primary-foreground" />
           </div>
-          <h1 className="text-3xl font-bold text-foreground">Chat Local</h1>
+          <h1 className="text-3xl font-bold text-foreground">KaapehChat</h1>
         </div>
 
         <div className="bg-card rounded-2xl p-8 border border-border shadow-lg">

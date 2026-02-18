@@ -51,7 +51,7 @@ export default function AppLayout() {
                 <div className="w-20 h-20 rounded-3xl bg-primary/10 flex items-center justify-center mb-4">
                   <MessageSquare className="w-10 h-10 text-primary" />
                 </div>
-                <h2 className="text-xl font-semibold text-foreground mb-2">Chat Local</h2>
+                <h2 className="text-xl font-semibold text-foreground mb-2">KaapehChat</h2>
                 <p className="text-sm">Selecciona un chat para comenzar</p>
               </div>
             )}

@@ -1,94 +1,86 @@
-# Frontend (React + Vite) — Guía técnica
+# KaapehChat Frontend (React + Vite)
 
-Este frontend implementa UI de chat en tiempo real y señalización WebRTC sobre WebSocket.
+Este frontend implementa la interfaz web de KaapehChat: autenticación, lista de conversaciones, chat en tiempo real y experiencia de llamadas de audio/video sobre WebRTC.
 
-## Stack
+## 1. Tecnologías
 
 - React 18 + TypeScript
 - Vite 5
 - React Router
-- Tailwind + shadcn/ui
+- Tailwind CSS + componentes UI
 - Vitest + Testing Library
 
-## Scripts
+## 2. Instalación
 
 ```bash
 npm install
-npm run dev
-npm run build
-npm run preview
-npm test
 ```
 
-## Configuración clave
+## 3. Variables de entorno
 
-### Alias `@`
-
-- Definido en `vite.config.ts` y `vitest.config.ts` hacia `./src`.
-- Debe coincidir con TypeScript:
-  - `tsconfig.json` → `@/* -> src/*`
-  - `tsconfig.app.json` → `@/* -> src/*`
-
-### Variables de entorno
-
-Archivo `frontend/.env`:
+Crea `frontend/.env`:
 
 ```env
-VITE_WS_URL=wss://<SERVER_IP>:8765
+VITE_WS_URL=ws://127.0.0.1:8765
 ```
 
-> Si se omite, el cliente intenta resolver WS usando host actual + `:8765`.
+- En local usa `ws://`.
+- En red con certificado TLS usa `wss://`.
 
-## Flujo de red en frontend
+## 4. Scripts disponibles
 
-1. `wsClient.connect(token)` abre WebSocket.
-2. Se envía evento `hello` con JWT para restaurar sesión.
-3. App escucha eventos de dominio (`chat:list:ok`, `message:receive`, `rtc:signal`, etc.).
-4. Para llamadas, `CallOverlay` maneja peers WebRTC y usa WS solo para señalización (`offer/answer/ice/end`).
+```bash
+npm run dev         # servidor de desarrollo
+npm run build       # build producción
+npm run preview     # vista previa local de build
+npm run test        # pruebas unitarias/integración
+npm run lint        # lint de código
+```
 
-## Eventos WS usados por frontend
+## 5. Flujo funcional del frontend
 
-### Auth / sesión
-- `auth:login`
-- `auth:register`
-- `auth:ok`
-- `hello`
-- `hello:ok`
-- `auth:error`
+1. Usuario accede a login o registro.
+2. Se envía evento de autenticación al backend vía WebSocket.
+3. Al autenticar, el cliente obtiene token y datos de sesión.
+4. Se cargan chats y mensajes históricos según la conversación activa.
+5. El envío/recepción de mensajes ocurre en tiempo real por WS.
+6. Para llamadas, el frontend usa `rtc:signal` para intercambio de oferta/respuesta/ICE.
 
-### Chats / mensajes
-- `chat:list`
-- `chat:list:ok`
-- `chat:createDirect`
-- `chat:created`
-- `group:create`
-- `group:created`
-- `group:invite`
-- `message:send`
-- `message:receive`
-- `message:list:ok`
+## 6. Estructura de carpetas importante
 
-### Presencia / RTC
-- `presence:update`
-- `rtc:signal` (`offer`, `answer`, `ice`, `end`)
+```text
+frontend/
+  src/
+    components/      # UI reutilizable y vistas de chat
+    contexts/        # estado global de sesión/chats/calls
+    pages/           # login, registro y layout principal
+    lib/             # cliente WS y utilidades
+    types/           # tipados TypeScript
+```
 
-## Llamadas (resumen técnico)
+## 7. Ejecución en red local
 
-- Modo directo y grupal con múltiples `RTCPeerConnection` por participante.
-- Cola de ICE por peer para carreras de señalización.
-- Intento de recuperación de llamada tras refresh usando `sessionStorage` (`activeCall`).
-- Micrófono inicia silenciado por defecto (`track.enabled = false`).
+Para acceder desde otro equipo:
 
-## Build de producción (LAN)
+1. Ejecuta el frontend en modo dev o sirve la build.
+2. Configura `VITE_WS_URL` con IP real del backend.
+3. Verifica puertos abiertos y firewall.
+4. Reinicia frontend después de cambios en `.env`.
+
+## 8. Build y despliegue
 
 ```bash
 npm run build
-# recomendado servir con fallback SPA y HTTPS
-serve -s dist -l 8080 --ssl-cert ../certs/local.pem --ssl-key ../certs/local-key.pem
 ```
 
-## Problemas comunes
+El resultado queda en `frontend/dist`. Puedes servirlo con cualquier servidor estático con soporte SPA.
 
-- **Error en imports `@/...`**: valida `tsconfig*.json` + `vite.config.ts`.
-- **WS reconectando infinito**: revisa `VITE_WS_URL`, backend WSS y certificado/host.
-- **WebRTC sin cámara/mic**: confirma HTTPS y permisos navegador.
+## 9. Problemas comunes
+
+- **Pantalla en blanco:** revisa consola del navegador y errores de build/lint.
+- **No conecta WebSocket:** valida `VITE_WS_URL` y backend activo.
+- **Error de permisos multimedia:** usar HTTPS/WSS y permisos del navegador.
+
+## Autor
+
+**KaapehChat**
